@@ -49,6 +49,8 @@
 #define AU         1.496e11      /* meters per astronomical unit               */
 #define DAY        86400.0       /* seconds per day                            */
 #define SOFTENING  1e9           /* collision softening radius (m)             */
+/* GM_sun in AU^3/day^2  (= 6.674e-11 * 1.989e30 / AU^3 * DAY^2) */
+#define GM_SUN     2.9591220828559093e-4
 
 #define WIN_W      1280
 #define WIN_H       720
@@ -111,11 +113,13 @@ static void cam_dir(const Camera *c, float *dx, float *dy, float *dz)
 
 static void cam_reset(void)
 {
+    /* Ecliptic plane is now GL-XZ.  Camera sits above (Y) and slightly
+     * to the "south" (positive Z) for a natural top-down perspective. */
     g_cam.pos[0] =  0.0f;
-    g_cam.pos[1] =  8.0f;   /*  8 AU above the ecliptic   */
-    g_cam.pos[2] = 20.0f;   /* 20 AU "south"              */
+    g_cam.pos[1] = 20.0f;   /* 20 AU above ecliptic plane */
+    g_cam.pos[2] = 25.0f;   /* 25 AU "south"              */
     g_cam.yaw    = 180.0f;
-    g_cam.pitch  = -22.0f;
+    g_cam.pitch  = -38.0f;
     g_cam.speed  =  0.5f;
 }
 
@@ -148,70 +152,177 @@ static void add_body(
     memset(bo->trail, 0, sizeof(bo->trail));
 }
 
-/*
- * Approximate J2000.0 heliocentric state vectors.
- * Positions in AU, velocities in km/s.
- * Source: NASA Fact Sheets + Horizons epoch 2000-Jan-1.5.
+/* ----------------------------------------------------------------
+ * Keplerian orbital mechanics
+ * ---------------------------------------------------------------- */
+
+/* Newton-Raphson solver for Kepler's equation: M = E - e*sin(E) */
+static double solve_kepler(double M, double e)
+{
+    double E = M;
+    int k;
+    for (k = 0; k < 50; k++) {
+        double dE = (M - E + e * sin(E)) / (1.0 - e * cos(E));
+        E += dE;
+        if (fabs(dE) < 1e-12) break;
+    }
+    return E;
+}
+
+/* Convert Keplerian elements (J2000.0 epoch, JPL convention) to
+ * heliocentric Cartesian state in the simulation's GL frame.
  *
- * The planets start on the +X axis with their mean circular-orbit
- * speeds in the +Y direction (ecliptic plane = XZ plane in GL coords).
- * The simulation will naturally evolve them into elliptic orbits.
+ * GL coordinate mapping from ecliptic:
+ *   GL X  =  ecl X   (toward vernal equinox)
+ *   GL Y  =  ecl Z   (ecliptic north pole  → "up" in GL)
+ *   GL Z  =  ecl Y   (90° east in ecliptic → "depth" in GL)
+ *
+ * Parameters (all angles in degrees, a in AU):
+ *   a            semi-major axis
+ *   e            eccentricity
+ *   i            inclination
+ *   Omega        longitude of ascending node
+ *   omega_tilde  longitude of perihelion (= Omega + omega)
+ *   L            mean longitude at epoch
+ *
+ * Output: pos_m in metres, vel_ms in m/s (both 3-element arrays)
  */
+static void keplerian_to_state(
+    double a, double e, double i_deg,
+    double Omega_deg, double omega_tilde_deg, double L_deg,
+    double pos_m[3], double vel_ms[3])
+{
+    double deg = PI / 180.0;
+    double i     = i_deg           * deg;
+    double Omega = Omega_deg       * deg;
+    double omega_tilde = omega_tilde_deg * deg;
+    double L     = L_deg           * deg;
+    double omega = omega_tilde - Omega;   /* argument of perihelion */
+
+    /* Mean anomaly, normalised to (-PI, PI] */
+    double M = fmod(L - omega_tilde, 2.0*PI);
+    if (M >  PI) M -= 2.0*PI;
+    if (M < -PI) M += 2.0*PI;
+
+    double E  = solve_kepler(M, e);
+    double nu = 2.0 * atan2(sqrt(1.0+e)*sin(E*0.5),
+                             sqrt(1.0-e)*cos(E*0.5));
+    double r  = a * (1.0 - e*cos(E));
+
+    /* Position and velocity in the perifocal (PQW) frame */
+    double h    = sqrt(GM_SUN * a * (1.0 - e*e));   /* spec. ang. momentum AU²/day */
+    double x_p  = r * cos(nu);
+    double y_p  = r * sin(nu);
+    double vx_p = -(GM_SUN/h) * sin(nu);
+    double vy_p =  (GM_SUN/h) * (e + cos(nu));
+
+    /* Rotation matrix (PQW → ecliptic):  P-hat and Q-hat columns */
+    double cO = cos(Omega), sO = sin(Omega);
+    double co = cos(omega), so = sin(omega);
+    double ci = cos(i),     si = sin(i);
+
+    double Px =  cO*co - sO*so*ci,   Qx = -cO*so - sO*co*ci;
+    double Py =  sO*co + cO*so*ci,   Qy = -sO*so + cO*co*ci;
+    double Pz =  so*si,              Qz =  co*si;
+
+    /* Ecliptic Cartesian (AU and AU/day) */
+    double ex = Px*x_p + Qx*y_p,   evx = Px*vx_p + Qx*vy_p;
+    double ey = Py*x_p + Qy*y_p,   evy = Py*vx_p + Qy*vy_p;
+    double ez = Pz*x_p + Qz*y_p,   evz = Pz*vx_p + Qz*vy_p;
+
+    /* Map ecliptic → GL and convert units */
+    double au2m  = AU;
+    double aud2ms = AU / DAY;  /* AU/day → m/s */
+
+    pos_m[0] = ex * au2m;    vel_ms[0] = evx * aud2ms;
+    pos_m[1] = ez * au2m;    vel_ms[1] = evz * aud2ms;  /* ecl Z → GL Y */
+    pos_m[2] = ey * au2m;    vel_ms[2] = evy * aud2ms;  /* ecl Y → GL Z */
+}
+
+/* Add a body with position (m) and velocity (m/s) given directly */
+static void add_body_si(const char *name, double mass, double radius_km,
+                        const double p[3], const double v[3],
+                        float r, float gc, float b, int is_star)
+{
+    Body *bo = &g_bodies[g_nbodies++];
+    strncpy(bo->name, name, 31);
+    bo->mass     = mass;
+    bo->radius   = radius_km * 1000.0;
+    bo->pos[0]   = p[0]; bo->pos[1] = p[1]; bo->pos[2] = p[2];
+    bo->vel[0]   = v[0]; bo->vel[1] = v[1]; bo->vel[2] = v[2];
+    bo->acc[0]   = bo->acc[1] = bo->acc[2] = 0.0;
+    bo->col[0]   = r;  bo->col[1] = gc; bo->col[2] = b;
+    bo->is_star  = is_star;
+    bo->thead    = 0;  bo->tcount = 0;
+    memset(bo->trail, 0, sizeof(bo->trail));
+}
+
+/* ----------------------------------------------------------------
+ * Solar system initialisation — real J2000.0 Keplerian elements
+ * Source: JPL "Keplerian Elements for Approximate Positions of the
+ *         Major Planets", Table 1 (valid ~1800–2050 AD)
+ *         https://ssd.jpl.nasa.gov/txt/p_elem_t1.txt
+ *
+ * Columns: a(AU)  e  i(°)  Ω(°)  ω̃(°)  L(°)
+ * ---------------------------------------------------------------- */
 static void init_solar_system(void)
 {
-    /* Sun */
-    add_body("Sun",     1.989e30,  696000,
-              0.0,      0.0,  0.0,
-              0.0,      0.0,  0.0,
-              1.0f, 0.92f, 0.23f, 1);
+    double p[3], v[3];
+    int i;
 
-    /* Mercury  a=0.387 AU, v_circ~47.87 km/s */
-    add_body("Mercury", 3.301e23,   2439.7,
-              0.3871,   0.0,  0.0,
-              0.0,     47.87, 0.0,
-              0.75f, 0.72f, 0.68f, 0);
+    /* Sun — positioned at origin; velocity corrected below */
+    add_body("Sun", 1.989e30, 696000,
+             0.0, 0.0, 0.0,
+             0.0, 0.0, 0.0,
+             1.0f, 0.92f, 0.23f, 1);
+
+    /* Mercury */
+    keplerian_to_state(0.38709927, 0.20563593,  7.00497902,
+                       48.33076593, 77.45779628, 252.25032350, p, v);
+    add_body_si("Mercury", 3.301e23,  2439.7, p, v, 0.75f,0.72f,0.68f, 0);
 
     /* Venus */
-    add_body("Venus",   4.867e24,   6051.8,
-              0.7233,   0.0,  0.0,
-              0.0,     35.02, 0.0,
-              0.95f, 0.78f, 0.35f, 0);
+    keplerian_to_state(0.72333566, 0.00677672,  3.39467605,
+                       76.67984255, 131.60246718, 181.97909950, p, v);
+    add_body_si("Venus",   4.867e24,  6051.8, p, v, 0.95f,0.78f,0.35f, 0);
 
     /* Earth */
-    add_body("Earth",   5.972e24,   6371.0,
-              1.0000,   0.0,  0.0,
-              0.0,     29.78, 0.0,
-              0.27f, 0.55f, 0.95f, 0);
+    keplerian_to_state(1.00000261, 0.01671123, -0.00001531,
+                       0.0, 102.93768193, 100.46457166, p, v);
+    add_body_si("Earth",   5.972e24,  6371.0, p, v, 0.27f,0.55f,0.95f, 0);
 
     /* Mars */
-    add_body("Mars",    6.417e23,   3389.5,
-              1.5237,   0.0,  0.0,
-              0.0,     24.13, 0.0,
-              0.90f, 0.32f, 0.14f, 0);
+    keplerian_to_state(1.52371034, 0.09339410,  1.84969142,
+                       49.55953891, -23.94362959, -4.55343205, p, v);
+    add_body_si("Mars",    6.417e23,  3389.5, p, v, 0.90f,0.32f,0.14f, 0);
 
     /* Jupiter */
-    add_body("Jupiter", 1.898e27,  71492.0,
-              5.2034,   0.0,  0.0,
-              0.0,     13.07, 0.0,
-              0.82f, 0.65f, 0.45f, 0);
+    keplerian_to_state(5.20288700, 0.04838624,  1.30439695,
+                       100.47390909, 14.72847983, 34.39644051, p, v);
+    add_body_si("Jupiter", 1.898e27, 71492.0, p, v, 0.82f,0.65f,0.45f, 0);
 
     /* Saturn */
-    add_body("Saturn",  5.683e26,  60268.0,
-              9.5371,   0.0,  0.0,
-              0.0,      9.69, 0.0,
-              1.00f, 0.90f, 0.60f, 0);
+    keplerian_to_state(9.53667594, 0.05386179,  2.48599187,
+                       113.66242448, 92.59887831, 49.95424423, p, v);
+    add_body_si("Saturn",  5.683e26, 60268.0, p, v, 1.00f,0.90f,0.60f, 0);
 
     /* Uranus */
-    add_body("Uranus",  8.681e25,  25559.0,
-             19.1913,   0.0,  0.0,
-              0.0,      6.81, 0.0,
-              0.55f, 0.82f, 0.96f, 0);
+    keplerian_to_state(19.18916464, 0.04725744, 0.77263783,
+                       74.01692503, 170.95427630, 313.23810451, p, v);
+    add_body_si("Uranus",  8.681e25, 25559.0, p, v, 0.55f,0.82f,0.96f, 0);
 
     /* Neptune */
-    add_body("Neptune", 1.024e26,  24764.0,
-             30.0690,   0.0,  0.0,
-              0.0,      5.43, 0.0,
-              0.25f, 0.38f, 0.95f, 0);
+    keplerian_to_state(30.06992276, 0.00859048, 1.77004347,
+                       131.78422574, 44.96476227, -55.12002969, p, v);
+    add_body_si("Neptune", 1.024e26, 24764.0, p, v, 0.25f,0.38f,0.95f, 0);
+
+    /* Put everything in the centre-of-mass frame:
+     * Sun gets the negative total momentum so Σ(m*v) = 0 */
+    for (i = 1; i < g_nbodies; i++) {
+        g_bodies[0].vel[0] -= g_bodies[i].mass * g_bodies[i].vel[0] / g_bodies[0].mass;
+        g_bodies[0].vel[1] -= g_bodies[i].mass * g_bodies[i].vel[1] / g_bodies[0].mass;
+        g_bodies[0].vel[2] -= g_bodies[i].mass * g_bodies[i].vel[2] / g_bodies[0].mass;
+    }
 }
 
 /* ------------------------------------------------------------------ physics */
@@ -406,15 +517,6 @@ static void draw_starfield(void)
     glPointSize(1.0f);
 }
 
-static void draw_label_dot(float wx, float wy, float wz, float r, float g_c, float b_c)
-{
-    glPointSize(4.0f);
-    glBegin(GL_POINTS);
-    glColor3f(r, g_c, b_c);
-    glVertex3f(wx, wy, wz);
-    glEnd();
-    glPointSize(1.0f);
-}
 
 /* ================================================================
  * SDL2_ttf label system
@@ -510,34 +612,36 @@ static void init_labels(void)
 
 /* Draw body label as a billboard that always faces the camera.
  * The label is anchored at (wx, wy, wz) and scales to a fixed screen height.
- * dcam = camera distance used to keep the label a constant pixel size. */
+ * dcam = camera distance used to keep the label a constant pixel size.
+ *
+ * Camera right and up are extracted from the current modelview matrix so the
+ * quad is always screen-parallel, regardless of camera pitch/roll. */
 static void render_label(int idx, float wx, float wy, float wz, float dcam)
 {
     float fw, fh, half_fov_tan;
-    float rx, rz;            /* camera right (horizontal only)   */
-    float fdx, fdy, fdz;
-    const float LABEL_PX_H = 14.0f;   /* desired label height in pixels  */
+    float rx, ry, rz;   /* camera right (world space) */
+    float ux, uy, uz;   /* camera up    (world space) */
+    GLdouble mv[16];
+    const float LABEL_PX_H = 14.0f;
 
     if (!g_label_tex[idx]) return;
 
-    /* World-space height that produces LABEL_PX_H pixels at this distance */
+    /* World-space size that produces LABEL_PX_H pixels at this distance */
     half_fov_tan = tanf(FOV * 0.5f * (float)PI / 180.0f);
     fh = (dcam * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;
     fw = fh * (float)g_label_w[idx] / (float)g_label_h[idx];
 
-    /* Camera right vector (horizontal, ignoring pitch so text stays upright) */
-    cam_dir(&g_cam, &fdx, &fdy, &fdz);
-    rx = -fdz;
-    rz =  fdx;
-    {   /* normalise */
-        float len = sqrtf(rx*rx + rz*rz);
-        if (len > 1e-6f) { rx /= len; rz /= len; }
-    }
-    (void)fdy;  /* suppress unused-variable warning */
+    /* Extract camera right (row 0) and up (row 1) from the modelview matrix.
+     * OpenGL stores matrices column-major, so row i = elements [i], [4+i],
+     * [8+i] of the flat array. */
+    glGetDoublev(GL_MODELVIEW_MATRIX, mv);
+    rx = (float)mv[0]; ry = (float)mv[4]; rz = (float)mv[8];
+    ux = (float)mv[1]; uy = (float)mv[5]; uz = (float)mv[9];
 
-    /* Anchor: just above the dot, shifted half a label-width to the right */
+    /* Anchor: attach point offset slightly right so the label sits
+     * just to the right of the body indicator. */
     float ax = wx + rx * (fw * 0.1f);
-    float ay = wy + fh * 0.2f;
+    float ay = wy + uy * (fh * 0.1f);
     float az = wz + rz * (fw * 0.1f);
 
     glDisable(GL_LIGHTING);
@@ -552,13 +656,13 @@ static void render_label(int idx, float wx, float wy, float wz, float dcam)
      * which = top of the SDL surface.  So: quad-bottom → t=1, quad-top → t=0. */
     glBegin(GL_QUADS);
     /* bottom-left  */ glTexCoord2f(0.0f, 1.0f);
-                       glVertex3f(ax,        ay,        az);
+                       glVertex3f(ax,                   ay,                   az);
     /* bottom-right */ glTexCoord2f(1.0f, 1.0f);
-                       glVertex3f(ax+fw*rx,  ay,        az+fw*rz);
+                       glVertex3f(ax+fw*rx,              ay+fw*ry,             az+fw*rz);
     /* top-right    */ glTexCoord2f(1.0f, 0.0f);
-                       glVertex3f(ax+fw*rx,  ay+fh,     az+fw*rz);
+                       glVertex3f(ax+fw*rx+fh*ux,        ay+fw*ry+fh*uy,       az+fw*rz+fh*uz);
     /* top-left     */ glTexCoord2f(0.0f, 0.0f);
-                       glVertex3f(ax,        ay+fh,     az);
+                       glVertex3f(ax+fh*ux,              ay+fh*uy,             az+fh*uz);
     glEnd();
 
     glDisable(GL_BLEND);
@@ -648,24 +752,49 @@ static void render(void)
         float bfx[MAX_BODIES], bfy[MAX_BODIES], bfz[MAX_BODIES];
         float bdr[MAX_BODIES], bdcam[MAX_BODIES];
         int   bshow[MAX_BODIES];
+        float half_fov_tan = tanf(FOV * 0.5f * (float)PI / 180.0f);
 
         for (i = 0; i < g_nbodies; i++) {
             Body  *b   = &g_bodies[i];
             float  fx  = (float)(b->pos[0] * RS);
             float  fy  = (float)(b->pos[1] * RS);
             float  fz  = (float)(b->pos[2] * RS);
-            float  dr  = (float)(b->radius * RS);
-            float  min_r = b->is_star ? 0.06f : 0.012f;
-            float  dcam, px_r;
+            float  nat_dr = (float)(b->radius * RS); /* physical radius in AU */
+            float  dcam, dr, px_r;
             int    slices, stacks;
-            if (dr < min_r) dr = min_r;
 
+            /* Distance from camera — must be computed before dr */
             dcam = sqrtf(
                 (fx - g_cam.pos[0]) * (fx - g_cam.pos[0]) +
                 (fy - g_cam.pos[1]) * (fy - g_cam.pos[1]) +
                 (fz - g_cam.pos[2]) * (fz - g_cam.pos[2]));
-            px_r = (WIN_H / 2.0f) * dr
-                   / (dcam * tanf(FOV * 0.5f * (float)PI / 180.0f) + 1e-9f);
+
+            /* Visual radius:
+             *
+             * Stars render at their true physical size.  From Earth the Sun
+             * subtends ~0.53° — accurate.  A depth-tested dot handles the
+             * case where it is too small to see as a disc.
+             *
+             * Planets use a distance-adaptive boost: just enough to keep the
+             * body at MIN_VIS_PX apparent pixel radius, capped at MAX_BOOST.
+             * When the camera is close the boost naturally falls toward 1×
+             * (physical size), so proportions look correct up close.
+             * No hard minimum-radius clamp is applied — the dot system
+             * handles sub-pixel bodies. */
+            if (b->is_star) {
+                dr = nat_dr;
+            } else {
+                const float MIN_VIS_PX = 3.0f;
+                const float MAX_BOOST  = 100.0f;
+                float px_at_1x = (WIN_H / 2.0f) * nat_dr
+                                 / (dcam * half_fov_tan + 1e-9f);
+                float boost = MIN_VIS_PX / px_at_1x;
+                if (boost < 1.0f) boost = 1.0f;
+                if (boost > MAX_BOOST) boost = MAX_BOOST;
+                dr = nat_dr * boost;
+            }
+
+            px_r = (WIN_H / 2.0f) * dr / (dcam * half_fov_tan + 1e-9f);
 
             bfx[i] = fx;  bfy[i] = fy;  bfz[i] = fz;
             bdr[i] = dr;  bdcam[i] = dcam;
@@ -712,16 +841,18 @@ static void render(void)
             glGetDoublev(GL_PROJECTION_MATRIX, prmat);
             glGetIntegerv(GL_VIEWPORT, vp);
 
-            /* Project label anchors → screen rects */
+            /* Project label anchors → screen rects.
+             * Body 0 (Sun) is always labelled; others obey show_dot + dist. */
             for (i = 0; i < g_nbodies; i++) {
                 GLdouble sx, sy, sz;
                 float ph, pw;
+                int is_sun = (i == 0);
                 order[i] = i;
                 lvis[i]  = 0;
 
-                if (!bshow[i])                continue;
-                if (bdcam[i] > MAX_LABEL_DIST) continue;
-                if (!g_label_tex[i])           continue;
+                if (!is_sun && !bshow[i])                continue;
+                if (!is_sun && bdcam[i] > MAX_LABEL_DIST) continue;
+                if (!g_label_tex[i])                      continue;
 
                 if (gluProject(bfx[i], bfy[i] + bdr[i] * 1.4f, bfz[i],
                                mvmat, prmat, vp,
@@ -730,7 +861,6 @@ static void render(void)
 
                 ph = 14.0f;
                 pw = ph * (float)g_label_w[i] / (float)g_label_h[i];
-                /* gluProject Y is bottom-up; convert to top-down screen coords */
                 lsx[i] = (float)sx;
                 lsy[i] = (float)(WIN_H - sy) - ph;
                 lsw[i] = pw + LBL_PAD;
@@ -738,10 +868,14 @@ static void render(void)
                 lvis[i] = 1;
             }
 
-            /* Insertion sort by distance – closest body wins overlaps */
-            for (i = 1; i < g_nbodies; i++) {
+            /* Insertion sort by distance – closest body wins overlaps.
+             * Sun (index 0) is pinned to the front so it is processed
+             * first and can never be displaced by another label.        */
+            order[0] = 0;
+            for (i = 1; i < g_nbodies; i++) order[i] = i;
+            for (i = 2; i < g_nbodies; i++) {   /* start at 2 – skip Sun at 0 */
                 int tmp = order[i], k = i;
-                while (k > 0 && bdcam[order[k-1]] > bdcam[tmp]) {
+                while (k > 1 && bdcam[order[k-1]] > bdcam[tmp]) {
                     order[k] = order[k-1];
                     k--;
                 }
@@ -765,13 +899,31 @@ static void render(void)
                 }
             }
 
-            /* Draw: dot always, label only when not overlapping */
+            /* Pass A – dots.
+             * Each dot is drawn at the body's geometric centre with the
+             * depth test active.  The sphere rendered in pass 1 already
+             * wrote depth values for its front face; those values are
+             * closer to the camera than the centre point, so the depth
+             * test automatically hides the dot whenever the sphere is
+             * large enough to be seen.  No explicit pixel-radius threshold
+             * is needed – the GPU handles it for free. */
+            glEnable(GL_DEPTH_TEST);
+            glPointSize(3.0f);
+            glBegin(GL_POINTS);
             for (i = 0; i < g_nbodies; i++) {
                 Body *b = &g_bodies[i];
-                if (!bshow[i]) continue;
-                draw_label_dot(bfx[i], bfy[i] + bdr[i] * 1.4f, bfz[i],
-                               b->col[0], b->col[1], b->col[2]);
-                if (lvis[i])
+                glColor3f(b->col[0], b->col[1], b->col[2]);
+                glVertex3f(bfx[i], bfy[i], bfz[i]);
+            }
+            glEnd();
+            glPointSize(1.0f);
+
+            /* Pass B – labels.
+             * Sun (index 0) is always labelled.  Other bodies only when
+             * their label was projected and survived overlap removal. */
+            for (i = 0; i < g_nbodies; i++) {
+                int is_sun = (i == 0);
+                if (lvis[i] || is_sun)
                     render_label(i, bfx[i], bfy[i] + bdr[i] * 1.4f, bfz[i],
                                  bdcam[i]);
             }
@@ -942,8 +1094,8 @@ int main(int argc, char *argv[])
             float spd = g_cam.speed * real_dt;
 
             cam_dir(&g_cam, &fdx, &fdy, &fdz);
-            right_x =  fdz;
-            right_z = -fdx;
+            right_x = -fdz;
+            right_z =  fdx;
 
             if (k[SDL_SCANCODE_W] || k[SDL_SCANCODE_UP]) {
                 g_cam.pos[0] += fdx * spd;
