@@ -1,44 +1,56 @@
 # ============================================================
-# Makefile for Universe Simulator
+# Makefile — verse solar system simulator
 # ============================================================
 # Linux:   make
-# Windows: mingw32-make -f Makefile
+# Windows: mingw32-make  (MSYS2 / MinGW-w64)
 
 CC      = gcc
-TARGET  = universe
+TARGET  = verse
 
-# Source files
-SRC = universe.c
+SRCDIR  = src
+SRCS    = $(wildcard $(SRCDIR)/*.c)
+OBJS    = $(SRCS:.c=.o)
 
-# Compiler flags
-CFLAGS  = -Wall -Wextra -O2 -std=c99
+CFLAGS  = -Wall -Wextra -O2 -std=c99 -I$(SRCDIR)
 
 # Auto-detect platform
 UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME), Linux)
-    # Linux
-    LDFLAGS = -lSDL2 -lSDL2_ttf -lGL -lGLU -lm
-    EXT     =
-else ifeq ($(UNAME), Darwin)
-    # macOS (SDL2 via Homebrew, frameworks for GL)
     CFLAGS  += $(shell sdl2-config --cflags)
-    LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -framework OpenGL -lm
-    EXT     =
+    LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -lGL -lGLEW -lm
+    EXT      =
+
+else ifeq ($(UNAME), Darwin)
+    CFLAGS  += $(shell sdl2-config --cflags)
+    LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -lGLEW \
+               -framework OpenGL -lm
+    EXT      =
+
 else
-    # Windows (MSYS2 / MinGW)
-    SDL2_DIR ?= C:/SDL2
-    CFLAGS  += -I$(SDL2_DIR)/include/SDL2
-    LDFLAGS  = -L$(SDL2_DIR)/lib -lSDL2 -lSDL2_ttf -lopengl32 -lglu32 -lm
-    EXT     = .exe
+    # Windows — MSYS2 / MinGW-w64
+    # Set SDL2_DIR if SDL2 is not in the default MinGW prefix.
+    # Example: SDL2_DIR = C:/msys64/mingw64
+    SDL2_DIR ?= C:/msys64/mingw64
+    CFLAGS  += -I$(SDL2_DIR)/include/SDL2 -I$(SDL2_DIR)/include
+    LDFLAGS  = -L$(SDL2_DIR)/lib \
+               -lSDL2 -lSDL2_ttf \
+               -lglew32 \
+               -lopengl32 -lglu32 \
+               -lm
+    EXT      = .exe
 endif
 
+# ---- Rules ---------------------------------------------------------
 all: $(TARGET)$(EXT)
 
-$(TARGET)$(EXT): $(SRC)
+$(TARGET)$(EXT): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+$(SRCDIR)/%.o: $(SRCDIR)/%.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
 clean:
-	rm -f $(TARGET) $(TARGET).exe
+	rm -f $(SRCDIR)/*.o $(TARGET) $(TARGET).exe
 
 .PHONY: all clean

@@ -1,0 +1,27 @@
+/*
+ * body.h — Body data structure and solar-system initialisation
+ */
+#pragma once
+#include "common.h"
+
+typedef struct {
+    char   name[32];
+    double mass;           /* kg                              */
+    double radius;         /* m (physical)                    */
+    double pos[3];         /* m, simulation frame             */
+    double vel[3];         /* m/s                             */
+    double acc[3];         /* m/s^2 (recomputed each step)    */
+    float  col[3];         /* RGB display colour              */
+    int    is_star;
+
+    /* Orbital trail (circular buffer, positions in GL/AU units) */
+    int    trail_head;
+    int    trail_count;
+    float  trail[TRAIL_LEN][3];
+} Body;
+
+extern Body g_bodies[MAX_BODIES];
+extern int  g_nbodies;
+
+/* Populate g_bodies with real J2000.0 Keplerian elements */
+void solar_system_init(void);
