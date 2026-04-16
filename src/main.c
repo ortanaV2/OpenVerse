@@ -234,20 +234,15 @@ int main(int argc, char **argv) {
     render_init();
     labels_init();
 
-    /* Trail warm-up: pre-simulate 2 years in large steps so trails have
-     * visible history from the first frame.  Step size = 5 days for
-     * stability; sample every TRAIL_SAMPLE_INTERVAL sim-seconds. */
+    /* Trail warm-up: pre-simulate 2 years in 1-day steps, one trail sample
+     * per step.  1-day steps give ~88 points/orbit for Mercury (smooth),
+     * ~365 for Earth, and fill TRAIL_LEN=2048 slots with ~5.6 years of
+     * history.  730 steps is negligible CPU time at startup. */
     {
-        const double WARMUP_DAYS = 365.0 * 2.0;
-        const double STEP        = DAY * 5.0;
-        double accum = 0.0;
-        for (double t = 0.0; t < WARMUP_DAYS * DAY; t += STEP) {
-            physics_step(STEP);
-            accum += STEP;
-            if (accum >= TRAIL_SAMPLE_INTERVAL) {
-                accum -= TRAIL_SAMPLE_INTERVAL;
-                trails_sample();
-            }
+        const int WARMUP_STEPS = (int)(365.0 * 2.0); /* 2 years × 1 day */
+        for (int i = 0; i < WARMUP_STEPS; i++) {
+            physics_step(DAY);
+            trails_sample();
         }
     }
 
