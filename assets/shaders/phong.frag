@@ -1,18 +1,15 @@
 #version 330 core
 /*
- * phong.frag — ray-sphere intersection, world-space Phong shading
+ * phong.frag — per-pixel ray-sphere intersection using gl_FragCoord
  *
- * v_uv arrives in [-BILL_SCALE, +BILL_SCALE] (see phong.vert).
- * Reconstructing frag_bill = center + right*v_uv.x*radius + up*v_uv.y*radius
- * gives the exact world-space position of this fragment on the billboard,
- * consistent with the vertex expansion — so the ray direction is correct
- * even for off-axis spheres.
- *
- * The surface normal is derived from the true sphere intersection, not the
- * billboard UV, so shadows are fixed in world space and never rotate with
- * the camera.
+ * Instead of deriving the ray from the interpolated billboard UV (which
+ * produces perspective errors for large/close spheres), we compute the
+ * exact ray for each screen pixel from gl_FragCoord + camera parameters.
+ * The billboard geometry still provides efficient culling; the fragment
+ * shader does the correct per-pixel intersection.
  */
 
+/* v_uv is kept for the emissive limb-darkening fallback only */
 in vec2 v_uv;
 
 uniform vec3  u_color;
@@ -24,35 +21,24 @@ uniform float u_radius;
 uniform vec3  u_cam_pos;
 uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
+uniform vec3  u_cam_fwd;     /* unit vector: direction camera looks (world) */
+uniform float u_fov_tan;     /* tan(FOV/2) — set once from render_init      */
+uniform float u_aspect;      /* WIN_W / WIN_H                               */
 
 out vec4 frag_color;
 
-const float BILL_SCALE = 2.0;
-
 void main() {
-    /* ---- emissive (sun / stars) ---------------------------------------- */
-    if (u_emission > 0.5) {
-        /* v_uv is in [-BILL_SCALE, +BILL_SCALE]; normalise to unit circle  */
-        float r2 = dot(v_uv, v_uv) / (BILL_SCALE * BILL_SCALE);
-        if (r2 > 1.0) discard;
-        float limb = 1.0 - 0.25 * r2;
-        frag_color = vec4(u_color * limb, 1.0);
-        return;
-    }
-
-    /* ---- reconstruct world-space billboard fragment position ------------ */
-    /* Consistent with vertex shader: off * BILL_SCALE → v_uv               */
-    vec3 frag_bill = u_center
-                   + u_cam_right * (v_uv.x * u_radius)
-                   + u_cam_up    * (v_uv.y * u_radius);
-
-    /* ---- ray from camera through this fragment -------------------------- */
-    vec3 ray_dir = normalize(frag_bill - u_cam_pos);
+    /* ---- per-pixel ray from gl_FragCoord (perspective-correct) --------- */
+    /* gl_FragCoord: (0,0) bottom-left → (WIN_W, WIN_H) top-right
+     * u_aspect*360 = WIN_W/2,  360 = WIN_H/2
+     * ndc = fragCoord / halfRes - 1  (NOT * 2 - 1, that would double-scale) */
+    vec2 ndc = gl_FragCoord.xy / vec2(u_aspect * 360.0, 360.0) - 1.0;
+    vec3 ray_dir = normalize(u_cam_fwd
+                           + u_cam_right * (ndc.x * u_aspect * u_fov_tan)
+                           + u_cam_up    * (ndc.y * u_fov_tan));
 
     /* ---- ray-sphere intersection ----------------------------------------
      * |cam_pos + t*D - center|^2 = radius^2
-     * oc = cam_pos - center
-     * t^2 + 2*dot(oc,D)*t + dot(oc,oc) - R^2 = 0
      * -------------------------------------------------------------------- */
     vec3  oc   = u_cam_pos - u_center;
     float b_   = dot(oc, ray_dir);
@@ -61,14 +47,20 @@ void main() {
 
     if (disc < 0.0) discard;
 
-    float t = -b_ - sqrt(disc);         /* front face                       */
-    if (t < 0.0) t = -b_ + sqrt(disc); /* camera inside sphere — back face */
+    float t = -b_ - sqrt(disc);
+    if (t < 0.0) t = -b_ + sqrt(disc);
     if (t < 0.0) discard;
 
     vec3 hit = u_cam_pos + t * ray_dir;
+    vec3 N   = normalize(hit - u_center);
 
-    /* ---- world-space normal (fixed, never rotates with the camera) ------ */
-    vec3 N = normalize(hit - u_center);
+    /* ---- emissive (sun / stars) ---------------------------------------- */
+    if (u_emission > 0.5) {
+        float cosA = max(dot(N, -ray_dir), 0.0);  /* 1=centre, 0=limb */
+        float limb = 0.75 + 0.25 * cosA;
+        frag_color = vec4(u_color * limb, 1.0);
+        return;
+    }
 
     /* ---- Phong diffuse -------------------------------------------------- */
     vec3  L     = normalize(u_sun_pos_world - hit);

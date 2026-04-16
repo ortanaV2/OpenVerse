@@ -32,6 +32,9 @@ static GLint  s_sp_radius      = -1;
 static GLint  s_sp_cam_right   = -1;
 static GLint  s_sp_cam_up      = -1;
 static GLint  s_sp_cam_pos     = -1;
+static GLint  s_sp_cam_fwd     = -1;
+static GLint  s_sp_fov_tan     = -1;
+static GLint  s_sp_aspect      = -1;
 static GLint  s_sp_color       = -1;
 static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
@@ -88,6 +91,15 @@ void render_init(void) {
     s_sp_ambient   = glGetUniformLocation(s_sphere_shader, "u_ambient");
     s_sp_sun_world = glGetUniformLocation(s_sphere_shader, "u_sun_pos_world");
     s_sp_cam_pos   = glGetUniformLocation(s_sphere_shader, "u_cam_pos");
+    s_sp_cam_fwd   = glGetUniformLocation(s_sphere_shader, "u_cam_fwd");
+    s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
+    s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
+
+    /* Frame-constant camera parameters */
+    glUseProgram(s_sphere_shader);
+    glUniform1f(s_sp_fov_tan, tanf(FOV * 0.5f * (float)(PI / 180.0)));
+    glUniform1f(s_sp_aspect,  (float)WIN_W / (float)WIN_H);
+    glUseProgram(0);
 
     /* Unit quad: UV (0,0)..(1,1) */
     static const float quad_v[] = {
@@ -134,9 +146,10 @@ void render_frame(const float view[16], const float proj[16],
     mat4_mul(vp, proj, view);
 
     /* Camera basis vectors in world space (extracted from view matrix) */
-    Vec3 cam_right, cam_up;
+    Vec3 cam_right, cam_up, cam_fwd;
     mat4_get_right(view, cam_right);
     mat4_get_up   (view, cam_up);
+    mat4_get_fwd  (view, cam_fwd);
 
     /* Sun position in world space (AU) — used directly for lighting */
     float sun_wx = (float)(g_bodies[0].pos[0] * RS);
@@ -162,6 +175,7 @@ void render_frame(const float view[16], const float proj[16],
     glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
     glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
     glUniform3f(s_sp_cam_pos,    g_cam.pos[0], g_cam.pos[1], g_cam.pos[2]);
+    glUniform3f(s_sp_cam_fwd,    cam_fwd[0],   cam_fwd[1],   cam_fwd[2]);
 
     glBindVertexArray(s_sphere_vao);
 

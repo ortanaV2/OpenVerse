@@ -234,6 +234,23 @@ int main(int argc, char **argv) {
     render_init();
     labels_init();
 
+    /* Trail warm-up: pre-simulate 2 years in large steps so trails have
+     * visible history from the first frame.  Step size = 5 days for
+     * stability; sample every TRAIL_SAMPLE_INTERVAL sim-seconds. */
+    {
+        const double WARMUP_DAYS = 365.0 * 2.0;
+        const double STEP        = DAY * 5.0;
+        double accum = 0.0;
+        for (double t = 0.0; t < WARMUP_DAYS * DAY; t += STEP) {
+            physics_step(STEP);
+            accum += STEP;
+            if (accum >= TRAIL_SAMPLE_INTERVAL) {
+                accum -= TRAIL_SAMPLE_INTERVAL;
+                trails_sample();
+            }
+        }
+    }
+
     /* Timing */
     Uint64 freq    = SDL_GetPerformanceFrequency();
     Uint64 prev    = SDL_GetPerformanceCounter();
