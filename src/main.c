@@ -205,14 +205,16 @@ static void camera_move(float dt) {
     float rlen = sqrtf(rx*rx + rz*rz);
     if (rlen > 1e-6f) { rx /= rlen; rz /= rlen; }
 
-    float spd = g_cam.speed * dt;
+    /* Compute delta in double so that pos (double) += tiny_delta never loses
+     * the increment due to float32 ULP at large orbital distances.          */
+    double dspd = (double)g_cam.speed * (double)dt;
 
-    if (s_key_w) { g_cam.pos[0] += fdx*spd; g_cam.pos[1] += fdy*spd; g_cam.pos[2] += fdz*spd; }
-    if (s_key_s) { g_cam.pos[0] -= fdx*spd; g_cam.pos[1] -= fdy*spd; g_cam.pos[2] -= fdz*spd; }
-    if (s_key_d) { g_cam.pos[0] += rx*spd;                            g_cam.pos[2] += rz*spd;  }
-    if (s_key_a) { g_cam.pos[0] -= rx*spd;                            g_cam.pos[2] -= rz*spd;  }
-    if (s_key_e) { g_cam.pos[1] += spd; }
-    if (s_key_q) { g_cam.pos[1] -= spd; }
+    if (s_key_w) { g_cam.pos[0] += (double)fdx*dspd; g_cam.pos[1] += (double)fdy*dspd; g_cam.pos[2] += (double)fdz*dspd; }
+    if (s_key_s) { g_cam.pos[0] -= (double)fdx*dspd; g_cam.pos[1] -= (double)fdy*dspd; g_cam.pos[2] -= (double)fdz*dspd; }
+    if (s_key_d) { g_cam.pos[0] += (double)rx*dspd;                                      g_cam.pos[2] += (double)rz*dspd;  }
+    if (s_key_a) { g_cam.pos[0] -= (double)rx*dspd;                                      g_cam.pos[2] -= (double)rz*dspd;  }
+    if (s_key_e) { g_cam.pos[1] += dspd; }
+    if (s_key_q) { g_cam.pos[1] -= dspd; }
 }
 
 /* ------------------------------------------------------------------ main */
@@ -307,8 +309,8 @@ int main(int argc, char **argv) {
         float fdx, fdy, fdz;
         cam_get_dir(&fdx, &fdy, &fdz);
 
-        float eye[3] = { g_cam.pos[0], g_cam.pos[1], g_cam.pos[2] };
-        float ctr[3] = { eye[0]+fdx,   eye[1]+fdy,   eye[2]+fdz   };
+        float eye[3] = { (float)g_cam.pos[0], (float)g_cam.pos[1], (float)g_cam.pos[2] };
+        float ctr[3] = { eye[0]+fdx,          eye[1]+fdy,          eye[2]+fdz          };
         float up[3]  = { 0.0f, 1.0f, 0.0f };
         mat4_lookAt(view, eye, ctr, up);
         mat4_strip_translation(view_rot, view);

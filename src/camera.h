@@ -5,7 +5,7 @@
 #include "common.h"
 
 typedef struct {
-    float pos[3];   /* AU */
+    double pos[3];  /* AU — double precision to avoid precision loss at large distances */
     float yaw;      /* degrees, horizontal */
     float pitch;    /* degrees, vertical   */
     float speed;    /* AU/second           */

@@ -8,9 +8,9 @@ Camera g_cam;
 
 void cam_reset(void) {
     /* Ecliptic plane = GL XZ.  Camera sits above (Y+) looking down. */
-    g_cam.pos[0] =   0.0f;
-    g_cam.pos[1] =  20.0f;   /* 20 AU above ecliptic */
-    g_cam.pos[2] =  25.0f;   /* 25 AU "south"        */
+    g_cam.pos[0] =   0.0;
+    g_cam.pos[1] =  20.0;   /* 20 AU above ecliptic */
+    g_cam.pos[2] =  25.0;   /* 25 AU "south"        */
     g_cam.yaw    = 180.0f;
     g_cam.pitch  = -38.0f;
     g_cam.speed  =   0.5f;
