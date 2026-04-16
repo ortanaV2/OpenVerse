@@ -26,6 +26,7 @@
 #include "trails.h"
 #include "labels.h"
 #include "render.h"
+#include "ui.h"
 
 /* ------------------------------------------------------------------ globals */
 static SDL_Window   *s_win = NULL;
@@ -102,6 +103,7 @@ static int app_init(void) {
 }
 
 static void app_quit(void) {
+    ui_shutdown();
     render_shutdown();
     labels_shutdown();
     trails_gl_shutdown();
@@ -224,6 +226,7 @@ int main(int argc, char **argv) {
     trails_gl_init();
     render_init();
     labels_init();
+    ui_init();
 
     /* Trail warm-up: pre-simulate 2 years in 0.02-day steps.
      * trails_tick() uses per-body intervals so moons fill their buffers
@@ -294,6 +297,7 @@ int main(int argc, char **argv) {
         /* Render */
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         render_frame(view, proj, view_rot, dt);
+        ui_render();
         SDL_GL_SwapWindow(s_win);
     }
 
