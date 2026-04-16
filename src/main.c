@@ -49,9 +49,14 @@ static const double SPEED_TABLE[] = {
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */
 
-/* Trail sampling: accumulate simulated time, sample every SIM day */
-static double s_trail_accum = 0.0;
-#define TRAIL_SAMPLE_INTERVAL DAY   /* sample every 1 simulated day */
+/* Trail sampling: sim-time accumulator + real-time fallback.
+ * At high speed: sample every TRAIL_SAMPLE_INTERVAL simulated seconds.
+ * At low speed:  also sample after TRAIL_REALTIME_MAX real seconds so
+ *                the trail doesn't stall visually. */
+static double s_trail_accum    = 0.0;
+static float  s_trail_real_acc = 0.0f;
+#define TRAIL_SAMPLE_INTERVAL  DAY    /* 1 simulated day between samples */
+#define TRAIL_REALTIME_MAX     2.0f   /* force a sample at least every 2s */
 
 /* ------------------------------------------------------------------ init / quit */
 static int app_init(void) {
@@ -185,8 +190,8 @@ static void handle_event(const SDL_Event *e, float dt) {
 
     case SDL_MOUSEWHEEL:
         g_cam.speed *= (e->wheel.y > 0) ? 1.3f : (1.0f / 1.3f);
-        if (g_cam.speed < 0.001f) g_cam.speed = 0.001f;
-        if (g_cam.speed > 200.0f) g_cam.speed = 200.0f;
+        if (g_cam.speed < 0.00001f) g_cam.speed = 0.00001f;
+        if (g_cam.speed > 200.0f)   g_cam.speed = 200.0f;
         break;
 
     default:
@@ -252,6 +257,7 @@ int main(int argc, char **argv) {
         camera_move(dt);
 
         /* Physics */
+        s_trail_real_acc += dt;
         if (!g_paused && g_sim_speed > 0.0) {
             double sim_dt = g_sim_speed * dt;
             /* Sub-step for stability: max 2 sim-days per step */
@@ -263,15 +269,20 @@ int main(int argc, char **argv) {
             }
             for (int i = 0; i < steps; i++) {
                 physics_step(step);
-                /* Trail sampling based on simulated time, not frame count.
-                 * This ensures smooth trails at any speed: at 1x we sample
-                 * ~once per frame, at 1000x we sample ~1000 times per frame. */
+                /* Primary: sample every TRAIL_SAMPLE_INTERVAL sim-seconds. */
                 s_trail_accum += step;
                 if (s_trail_accum >= TRAIL_SAMPLE_INTERVAL) {
-                    s_trail_accum -= TRAIL_SAMPLE_INTERVAL;
+                    s_trail_accum    -= TRAIL_SAMPLE_INTERVAL;
+                    s_trail_real_acc  = 0.0f;
                     trails_sample();
                 }
             }
+        }
+        /* Fallback: if real time since last sample exceeds TRAIL_REALTIME_MAX,
+         * force one sample so the trail doesn't stall at low sim speeds. */
+        if (s_trail_real_acc >= TRAIL_REALTIME_MAX) {
+            s_trail_real_acc = 0.0f;
+            trails_sample();
         }
 
         /* Build matrices */

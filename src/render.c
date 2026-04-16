@@ -31,11 +31,11 @@ static GLint  s_sp_center      = -1;
 static GLint  s_sp_radius      = -1;
 static GLint  s_sp_cam_right   = -1;
 static GLint  s_sp_cam_up      = -1;
+static GLint  s_sp_cam_pos     = -1;
 static GLint  s_sp_color       = -1;
 static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
-static GLint  s_sp_sun_view    = -1;
-static GLint  s_sp_view        = -1;
+static GLint  s_sp_sun_world   = -1;
 
 /* ------------------------------------------------------------------ dots */
 static GLuint s_dot_shader  = 0;
@@ -65,6 +65,11 @@ static float visual_radius(int i, float dcam) {
 
 /* ------------------------------------------------------------------ init */
 void render_init(void) {
+    /* Prevent near-plane clipping of close billboard geometry.
+     * Instead of discarding triangles that cross the near plane,
+     * OpenGL clamps their depth to [0,1] — no geometry disappears. */
+    glEnable(GL_DEPTH_CLAMP);
+
     /* --- Sphere billboard shader --- */
     s_sphere_shader = gl_shader_load("assets/shaders/phong.vert",
                                      "assets/shaders/phong.frag");
@@ -78,11 +83,11 @@ void render_init(void) {
     s_sp_radius   = glGetUniformLocation(s_sphere_shader, "u_radius");
     s_sp_cam_right= glGetUniformLocation(s_sphere_shader, "u_cam_right");
     s_sp_cam_up   = glGetUniformLocation(s_sphere_shader, "u_cam_up");
-    s_sp_color    = glGetUniformLocation(s_sphere_shader, "u_color");
-    s_sp_emission = glGetUniformLocation(s_sphere_shader, "u_emission");
-    s_sp_ambient  = glGetUniformLocation(s_sphere_shader, "u_ambient");
-    s_sp_sun_view = glGetUniformLocation(s_sphere_shader, "u_sun_pos_view");
-    s_sp_view     = glGetUniformLocation(s_sphere_shader, "u_view");
+    s_sp_color     = glGetUniformLocation(s_sphere_shader, "u_color");
+    s_sp_emission  = glGetUniformLocation(s_sphere_shader, "u_emission");
+    s_sp_ambient   = glGetUniformLocation(s_sphere_shader, "u_ambient");
+    s_sp_sun_world = glGetUniformLocation(s_sphere_shader, "u_sun_pos_world");
+    s_sp_cam_pos   = glGetUniformLocation(s_sphere_shader, "u_cam_pos");
 
     /* Unit quad: UV (0,0)..(1,1) */
     static const float quad_v[] = {
@@ -128,20 +133,15 @@ void render_frame(const float view[16], const float proj[16],
     Mat4 vp;
     mat4_mul(vp, proj, view);
 
-    /* Camera basis vectors (from view matrix rows) */
+    /* Camera basis vectors in world space (extracted from view matrix) */
     Vec3 cam_right, cam_up;
     mat4_get_right(view, cam_right);
     mat4_get_up   (view, cam_up);
 
-    /* Sun position in world space (AU) */
+    /* Sun position in world space (AU) — used directly for lighting */
     float sun_wx = (float)(g_bodies[0].pos[0] * RS);
     float sun_wy = (float)(g_bodies[0].pos[1] * RS);
     float sun_wz = (float)(g_bodies[0].pos[2] * RS);
-
-    /* Sun position in view space */
-    Vec4 sun_w4  = { sun_wx, sun_wy, sun_wz, 1.0f };
-    Vec4 sun_v4;
-    mat4_mul_vec4(sun_v4, view, sun_w4);
 
     /* ------------------------------------------------------------------ 1. Starfield */
     /* Stars live at unit-sphere radius → depth ≈ far plane → Z-fight with
@@ -157,11 +157,11 @@ void render_frame(const float view[16], const float proj[16],
     glDisable(GL_BLEND);
 
     glUseProgram(s_sphere_shader);
-    glUniformMatrix4fv(s_sp_vp,   1, GL_FALSE, vp);
-    glUniformMatrix4fv(s_sp_view, 1, GL_FALSE, view);
-    glUniform3f(s_sp_sun_view, sun_v4[0], sun_v4[1], sun_v4[2]);
-    glUniform3f(s_sp_cam_right, cam_right[0], cam_right[1], cam_right[2]);
-    glUniform3f(s_sp_cam_up,    cam_up[0],    cam_up[1],    cam_up[2]);
+    glUniformMatrix4fv(s_sp_vp,       1, GL_FALSE, vp);
+    glUniform3f(s_sp_sun_world,  sun_wx, sun_wy, sun_wz);
+    glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
+    glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
+    glUniform3f(s_sp_cam_pos,    g_cam.pos[0], g_cam.pos[1], g_cam.pos[2]);
 
     glBindVertexArray(s_sphere_vao);
 

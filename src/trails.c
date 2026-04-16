@@ -18,7 +18,7 @@ static GLint  s_loc_vp    = -1;
 static GLint  s_loc_color = -1;
 static GLint  s_loc_count = -1;
 
-static float  s_scratch[TRAIL_LEN * 3];   /* unroll buffer */
+static float  s_scratch[(TRAIL_LEN + 1) * 3];  /* +1 for live planet position */
 
 void trails_gl_init(void) {
     s_shader = gl_shader_load("assets/shaders/solid.vert",
@@ -32,7 +32,7 @@ void trails_gl_init(void) {
     for (int i = 0; i < MAX_BODIES; i++) {
         s_vao[i] = gl_vao_create();
         /* Allocate maximum capacity; actual data is partial each frame */
-        s_vbo[i] = gl_vbo_create(TRAIL_LEN * 3 * sizeof(float),
+        s_vbo[i] = gl_vbo_create((TRAIL_LEN + 1) * 3 * sizeof(float),
                                   NULL, GL_DYNAMIC_DRAW);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
@@ -65,15 +65,23 @@ void trails_render(const float vp[16]) {
             s_scratch[k*3+2] = b->trail[idx][2];
         }
 
+        /* Append the live planet position as the final point so the trail
+         * always connects to the planet with zero lag, regardless of how
+         * frequently trails_sample() is called. */
+        s_scratch[count*3+0] = (float)(b->pos[0] * RS);
+        s_scratch[count*3+1] = (float)(b->pos[1] * RS);
+        s_scratch[count*3+2] = (float)(b->pos[2] * RS);
+        int draw_count = count + 1;
+
         glBindVertexArray(s_vao[i]);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo[i]);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        count * 3 * sizeof(float), s_scratch);
+                        draw_count * 3 * sizeof(float), s_scratch);
 
         glUniform4f(s_loc_color,
                     b->col[0], b->col[1], b->col[2], 0.6f);
-        glUniform1i(s_loc_count, count);
-        glDrawArrays(GL_LINE_STRIP, 0, count);
+        glUniform1i(s_loc_count, draw_count);
+        glDrawArrays(GL_LINE_STRIP, 0, draw_count);
     }
 
     glDepthMask(GL_TRUE);
