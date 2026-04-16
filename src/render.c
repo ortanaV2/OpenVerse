@@ -51,19 +51,11 @@ static float half_fov_tan(void) {
     return tanf(FOV * 0.5f * (float)(PI / 180.0));
 }
 
-/* Distance-adaptive visual radius for a body (AU) */
+/* Natural visual radius for a body (AU) — no boost.
+ * Bodies too small to see as a disc are rendered as dots instead. */
 static float visual_radius(int i, float dcam) {
-    const Body *b = &g_bodies[i];
-    float nat_dr = (float)(b->radius * RS);
-    if (b->is_star) return nat_dr;  /* Sun/stars: 1× physical */
-
-    const float MIN_VIS_PX = 3.0f;
-    const float MAX_BOOST  = 100.0f;
-    float px_at_1x = (WIN_H / 2.0f) * nat_dr / (dcam * half_fov_tan() + 1e-9f);
-    float boost    = MIN_VIS_PX / px_at_1x;
-    if (boost < 1.0f)       boost = 1.0f;
-    if (boost > MAX_BOOST)  boost = MAX_BOOST;
-    return nat_dr * boost;
+    (void)dcam;
+    return (float)(g_bodies[i].radius * RS);
 }
 
 /* ------------------------------------------------------------------ init */
@@ -217,20 +209,73 @@ void render_frame(const float view[16], const float proj[16],
     }
     glBindVertexArray(0);
 
-    /* ------------------------------------------------------------------ 3. Center dots */
-    /* Only draw a dot when the body's visual disc is < 2.5px (too small to
-     * see the sphere quad) — same threshold as info[i].show. */
+    /* ------------------------------------------------------------------ 3. Center dots
+     * Priority: Sun(0) > planets > moons. Within each tier: closer first.
+     * Overlap check in screen space: two dots clash if their centres are
+     * closer than DOT_EXCL_PX pixels.                                      */
+#define DOT_EXCL_PX 6.0f   /* exclusion radius in pixels */
+
+    /* Build priority order: Sun, then planets by dcam, then moons by dcam */
+    int dot_order[MAX_BODIES];
+    int dot_np = 0, dot_nm = 0;
+    int dot_planets[MAX_BODIES], dot_moons[MAX_BODIES];
+    for (int i = 1; i < g_nbodies; i++) {
+        if (g_bodies[i].parent < 0) dot_planets[dot_np++] = i;
+        else                        dot_moons  [dot_nm++] = i;
+    }
+    for (int i = 1; i < dot_np; i++) {
+        int t = dot_planets[i], k = i;
+        while (k > 0 && info[dot_planets[k-1]].dcam > info[t].dcam)
+            { dot_planets[k] = dot_planets[k-1]; k--; }
+        dot_planets[k] = t;
+    }
+    for (int i = 1; i < dot_nm; i++) {
+        int t = dot_moons[i], k = i;
+        while (k > 0 && info[dot_moons[k-1]].dcam > info[t].dcam)
+            { dot_moons[k] = dot_moons[k-1]; k--; }
+        dot_moons[k] = t;
+    }
+    dot_order[0] = 0;
+    for (int i = 0; i < dot_np; i++) dot_order[1 + i]        = dot_planets[i];
+    for (int i = 0; i < dot_nm; i++) dot_order[1 + dot_np + i] = dot_moons[i];
+
+    /* Project to screen, greedy overlap removal, collect surviving dots */
+    float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
+    int   dot_vis[MAX_BODIES];
+    memset(dot_vis, 0, sizeof(dot_vis));
+
+    for (int oi = 0; oi < g_nbodies; oi++) {
+        int i = dot_order[oi];
+        if (!info[i].show) continue;   /* rendered as full sphere — no dot */
+        float sx, sy;
+        if (!mat4_project(vp, info[i].pos[0], info[i].pos[1], info[i].pos[2],
+                          WIN_W, WIN_H, &sx, &sy)) continue;
+        /* Check against all already-accepted dots */
+        int blocked = 0;
+        for (int oj = 0; oj < oi; oj++) {
+            int j = dot_order[oj];
+            if (!dot_vis[j]) continue;
+            float dx = sx - dot_sx[j], dy = sy - dot_sy[j];
+            if (dx*dx + dy*dy < DOT_EXCL_PX * DOT_EXCL_PX)
+                { blocked = 1; break; }
+        }
+        if (!blocked) {
+            dot_sx[i]  = sx;
+            dot_sy[i]  = sy;
+            dot_vis[i] = 1;
+        }
+    }
+
+    /* Upload and draw surviving dots */
     float dot_data[MAX_BODIES * 6];
     int   dot_count = 0;
-    for (int i = 0; i < g_nbodies; i++) {
-        if (!info[i].show) continue;   /* sphere is big enough — skip dot */
+    for (int oi = 0; oi < g_nbodies; oi++) {
+        int i = dot_order[oi];
+        if (!dot_vis[i]) continue;
         Body *b = &g_bodies[i];
-        float wx = (float)(b->pos[0] * RS);
-        float wy = (float)(b->pos[1] * RS);
-        float wz = (float)(b->pos[2] * RS);
-        dot_data[dot_count*6+0] = wx;
-        dot_data[dot_count*6+1] = wy;
-        dot_data[dot_count*6+2] = wz;
+        dot_data[dot_count*6+0] = (float)(b->pos[0] * RS);
+        dot_data[dot_count*6+1] = (float)(b->pos[1] * RS);
+        dot_data[dot_count*6+2] = (float)(b->pos[2] * RS);
         dot_data[dot_count*6+3] = b->col[0];
         dot_data[dot_count*6+4] = b->col[1];
         dot_data[dot_count*6+5] = b->col[2];
@@ -245,7 +290,7 @@ void render_frame(const float view[16], const float proj[16],
         glBufferSubData(GL_ARRAY_BUFFER, 0,
                         dot_count * 6 * sizeof(float), dot_data);
         glEnable(GL_DEPTH_TEST);
-        glPointSize(4.0f);
+        glPointSize(2.5f);
         glDrawArrays(GL_POINTS, 0, dot_count);
         glPointSize(1.0f);
         glBindVertexArray(0);

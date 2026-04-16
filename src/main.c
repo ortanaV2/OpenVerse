@@ -43,8 +43,7 @@ static const double SPEED_TABLE[] = {
     0.0,
     0.1, 0.25, 0.5,
     1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 100.0,
-    365.0, 730.0, 1825.0, 3650.0,
-    36500.0
+    365.0, 730.0, 1825.0, 3650.0
 };
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */

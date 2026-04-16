@@ -145,10 +145,13 @@ void labels_init(void) {
         col.g = (Uint8)(fminf(g_bodies[i].col[1]*1.4f+0.15f, 1.0f)*255);
         col.b = (Uint8)(fminf(g_bodies[i].col[2]*1.4f+0.15f, 1.0f)*255);
         col.a = 255;
+        int is_moon = (g_bodies[i].parent >= 0);
+        TTF_SetFontStyle(s_font, is_moon ? TTF_STYLE_ITALIC : TTF_STYLE_NORMAL);
         SDL_Surface *surf = TTF_RenderText_Blended(s_font, g_bodies[i].name, col);
         if (!surf) continue;
         s_tex[i] = surface_to_texture(surf, &s_tex_w[i], &s_tex_h[i]);
     }
+    TTF_SetFontStyle(s_font, TTF_STYLE_NORMAL);
 }
 
 void labels_render(const float view[16], const float proj[16],
