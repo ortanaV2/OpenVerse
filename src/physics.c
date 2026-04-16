@@ -208,9 +208,9 @@ void physics_step(double dt) {
 
 /* ── trail helpers ───────────────────────────────────────────────────── */
 static void sample_body(Body *b) {
-    b->trail[b->trail_head][0] = (float)(b->pos[0] * RS);
-    b->trail[b->trail_head][1] = (float)(b->pos[1] * RS);
-    b->trail[b->trail_head][2] = (float)(b->pos[2] * RS);
+    b->trail[b->trail_head][0] = b->pos[0] * RS;
+    b->trail[b->trail_head][1] = b->pos[1] * RS;
+    b->trail[b->trail_head][2] = b->pos[2] * RS;
     b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
     if (b->trail_count < TRAIL_LEN) b->trail_count++;
 }

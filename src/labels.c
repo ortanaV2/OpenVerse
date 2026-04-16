@@ -12,6 +12,7 @@
  */
 #include "labels.h"
 #include "body.h"
+#include "camera.h"
 #include "gl_utils.h"
 #include "math3d.h"
 
@@ -44,9 +45,7 @@ static int    s_tex_h[MAX_BODIES];
 static float s_show_accum[MAX_BODIES];   /* time continuously eligible to show */
 static float s_hide_accum[MAX_BODIES];   /* time continuously blocked/off      */
 static int   s_active[MAX_BODIES];       /* current visible state (0/1)        */
-static float s_last_ax[MAX_BODIES];      /* cached world-space anchor (AU)     */
-static float s_last_ay[MAX_BODIES];
-static float s_last_az[MAX_BODIES];
+/* anchor is recomputed from g_bodies[i].pos each frame — no float32 cache needed */
 
 static TTF_Font *s_font = NULL;
 
@@ -135,10 +134,6 @@ void labels_init(void) {
     memset(s_show_accum, 0, sizeof(s_show_accum));
     memset(s_hide_accum, 0, sizeof(s_hide_accum));
     memset(s_active,     0, sizeof(s_active));
-    memset(s_last_ax,    0, sizeof(s_last_ax));
-    memset(s_last_ay,    0, sizeof(s_last_ay));
-    memset(s_last_az,    0, sizeof(s_last_az));
-
     for (int i = 0; i < g_nbodies; i++) {
         SDL_Color col;
         col.r = (Uint8)(fminf(g_bodies[i].col[0]*1.4f+0.15f, 1.0f)*255);
@@ -181,10 +176,16 @@ void labels_render(const float view[16], const float proj[16],
         if (!s_tex[i])                                continue;
         if (!is_sun && info[i].dcam > MAX_LABEL_DIST) continue;
 
-        /* Anchor: just above the body centre */
-        float ax = info[i].pos[0];
-        float ay = info[i].pos[1] + info[i].dr * 1.4f;
-        float az = info[i].pos[2];
+        /* Anchor: just above the body centre.
+         * Subtract camera position in double to eliminate float32 cancellation
+         * when the camera is within a few thousand km of the body.
+         * vp here is proj×view_rot (camera-relative VP, no translation). */
+        double cx = (double)g_cam.pos[0];
+        double cy = (double)g_cam.pos[1];
+        double cz = (double)g_cam.pos[2];
+        float ax = (float)(g_bodies[i].pos[0] * RS - cx);
+        float ay = (float)(g_bodies[i].pos[1] * RS - cy) + info[i].dr * 1.4f;
+        float az = (float)(g_bodies[i].pos[2] * RS - cz);
 
         float sx, sy;
         if (!mat4_project(vp, ax, ay, az, WIN_W, WIN_H, &sx, &sy)) continue;
@@ -200,10 +201,6 @@ void labels_render(const float view[16], const float proj[16],
         lsw[i] = pw + LBL_PAD;
         lsh[i] = ph + LBL_PAD;
         lvis[i] = 1;
-        /* cache anchor for use during hide-delay fade-out */
-        s_last_ax[i] = ax;
-        s_last_ay[i] = ay;
-        s_last_az[i] = az;
     }
 
     /* ---- Step 2: priority order — Sun, then planets, then moons.
@@ -287,10 +284,19 @@ void labels_render(const float view[16], const float proj[16],
         float fh = (info[i].dcam * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;
         float fw = fh * (float)s_tex_w[i] / (float)s_tex_h[i];
 
-        /* Use cached anchor (valid even during hide-delay when lvis[i]=0) */
-        float ax = s_last_ax[i] + cam_right[0]*(fw*0.1f);
-        float ay = s_last_ay[i]              + cam_up[1]*(fh*0.1f);
-        float az = s_last_az[i] + cam_right[2]*(fw*0.1f);
+        /* Camera-relative anchor computed fresh from the double-precision body
+         * position — eliminates float32 jitter when close to small bodies.
+         * vp is proj×view_rot so camera-relative coords map correctly. */
+        double cx2 = (double)g_cam.pos[0];
+        double cy2 = (double)g_cam.pos[1];
+        double cz2 = (double)g_cam.pos[2];
+        float bax = (float)(g_bodies[i].pos[0] * RS - cx2);
+        float bay = (float)(g_bodies[i].pos[1] * RS - cy2) + info[i].dr * 1.4f;
+        float baz = (float)(g_bodies[i].pos[2] * RS - cz2);
+
+        float ax = bax + cam_right[0]*(fw*0.1f);
+        float ay = bay              + cam_up[1]*(fh*0.1f);
+        float az = baz + cam_right[2]*(fw*0.1f);
 
         Vec3 right_scaled, up_scaled;
         vec3_scale(right_scaled, cam_right, fw);

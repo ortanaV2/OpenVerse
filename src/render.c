@@ -140,6 +140,12 @@ void render_frame(const float view[16], const float proj[16],
     Mat4 vp;
     mat4_mul(vp, proj, view);
 
+    /* Camera-relative VP: proj × view_rot (no translation).
+     * Used for trails and labels whose vertex positions are expressed
+     * relative to the camera origin to avoid float32 precision loss. */
+    Mat4 vp_camrel;
+    mat4_mul(vp_camrel, proj, view_rot);
+
     /* Camera basis vectors in world space (extracted from view matrix) */
     Vec3 cam_right, cam_up, cam_fwd;
     mat4_get_right(view, cam_right);
@@ -316,10 +322,10 @@ void render_frame(const float view[16], const float proj[16],
     rings_render(vp);
 
     /* ------------------------------------------------------------------ 5. Trails */
-    trails_render(vp);
+    trails_render(vp_camrel);
 
-    /* ------------------------------------------------------------------ 5. Labels */
-    labels_render(view, proj, vp, info, dt);
+    /* ------------------------------------------------------------------ 6. Labels */
+    labels_render(view, proj, vp_camrel, info, dt);
 }
 
 /* ------------------------------------------------------------------ shutdown */

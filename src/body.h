@@ -26,7 +26,7 @@ typedef struct {
     double trail_accum;        /* accumulator toward next sample            */
     int    trail_head;
     int    trail_count;
-    float  trail[TRAIL_LEN][3];
+    double trail[TRAIL_LEN][3]; /* AU, camera-relative subtraction done at render time */
 } Body;
 
 extern Body g_bodies[MAX_BODIES];

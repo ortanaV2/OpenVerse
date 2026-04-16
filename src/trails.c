@@ -7,6 +7,7 @@
  */
 #include "trails.h"
 #include "body.h"
+#include "camera.h"
 #include "gl_utils.h"
 #include "math3d.h"
 
@@ -55,22 +56,27 @@ void trails_render(const float vp[16]) {
         Body *b = &g_bodies[i];
         if (b->is_star || b->trail_count < 2) continue;
 
-        /* Unroll the circular buffer: oldest → newest */
+        /* Unroll the circular buffer: oldest → newest.
+         * Subtract camera position in double to avoid float32 catastrophic
+         * cancellation when the camera is close to a small/distant body. */
         int count = b->trail_count;
         int head  = b->trail_head;
+        double cx = (double)g_cam.pos[0];
+        double cy = (double)g_cam.pos[1];
+        double cz = (double)g_cam.pos[2];
         for (int k = 0; k < count; k++) {
             int idx = (head - count + k + TRAIL_LEN) % TRAIL_LEN;
-            s_scratch[k*3+0] = b->trail[idx][0];
-            s_scratch[k*3+1] = b->trail[idx][1];
-            s_scratch[k*3+2] = b->trail[idx][2];
+            s_scratch[k*3+0] = (float)(b->trail[idx][0] - cx);
+            s_scratch[k*3+1] = (float)(b->trail[idx][1] - cy);
+            s_scratch[k*3+2] = (float)(b->trail[idx][2] - cz);
         }
 
         /* Append the live planet position as the final point so the trail
          * always connects to the planet with zero lag, regardless of how
          * frequently trails_sample() is called. */
-        s_scratch[count*3+0] = (float)(b->pos[0] * RS);
-        s_scratch[count*3+1] = (float)(b->pos[1] * RS);
-        s_scratch[count*3+2] = (float)(b->pos[2] * RS);
+        s_scratch[count*3+0] = (float)(b->pos[0] * RS - cx);
+        s_scratch[count*3+1] = (float)(b->pos[1] * RS - cy);
+        s_scratch[count*3+2] = (float)(b->pos[2] * RS - cz);
         int draw_count = count + 1;
 
         glBindVertexArray(s_vao[i]);
