@@ -18,10 +18,11 @@ uniform mat4  u_vp;
 uniform vec3  u_color;
 uniform float u_emission;
 uniform float u_ambient;
-uniform vec3  u_sun_pos_world;
-uniform vec3  u_center;
+uniform vec3  u_sun_pos_world;   /* kept for depth-write only          */
+uniform vec3  u_center;          /* body centre, world AU              */
 uniform float u_radius;
-uniform vec3  u_cam_pos;
+uniform vec3  u_oc;              /* cam_pos - center, computed CPU-side in double */
+uniform vec3  u_sun_rel;         /* sun_pos - center, computed CPU-side in double */
 uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
 uniform vec3  u_cam_fwd;
@@ -37,10 +38,12 @@ void main() {
                            + u_cam_right * (ndc.x * u_aspect * u_fov_tan)
                            + u_cam_up    * (ndc.y * u_fov_tan));
 
-    /* ---- ray-sphere intersection ---------------------------------------- */
-    vec3  oc   = u_cam_pos - u_center;
-    float b_   = dot(oc, ray_dir);
-    float c_   = dot(oc, oc) - u_radius * u_radius;
+    /* ---- ray-sphere intersection (all in center-relative space) ----------
+     * u_oc = cam_pos - center, computed CPU-side with double precision.
+     * This avoids catastrophic cancellation when center >> radius (e.g.
+     * Haumea at 43 AU with radius 0.000004 AU).                           */
+    float b_   = dot(u_oc, ray_dir);
+    float c_   = dot(u_oc, u_oc) - u_radius * u_radius;
     float disc = b_ * b_ - c_;
 
     if (disc < 0.0) discard;
@@ -49,12 +52,11 @@ void main() {
     if (t < 0.0) t = -b_ + sqrt(disc);
     if (t < 0.0) discard;
 
-    vec3 hit = u_cam_pos + t * ray_dir;
-    vec3 N   = normalize(hit - u_center);
+    vec3 hit_rel = u_oc + t * ray_dir;      /* hit relative to centre     */
+    vec3 N       = normalize(hit_rel);
+    vec3 hit     = u_center + hit_rel;      /* world space (for depth)    */
 
-    /* ---- write true sphere-surface depth --------------------------------
-     * Without this the depth buffer holds the flat billboard depth, so
-     * trails drawn later are not occluded by the planet surface.          */
+    /* ---- write true sphere-surface depth -------------------------------- */
     vec4 hit_clip  = u_vp * vec4(hit, 1.0);
     gl_FragDepth   = (hit_clip.z / hit_clip.w) * 0.5 + 0.5;
 
@@ -67,7 +69,7 @@ void main() {
     }
 
     /* ---- Phong diffuse -------------------------------------------------- */
-    vec3  L     = normalize(u_sun_pos_world - hit);
+    vec3  L     = normalize(u_sun_rel - hit_rel); /* sun relative to centre */
     float diff  = max(dot(N, L), 0.0);
     float light = u_ambient + (1.0 - u_ambient) * diff;
 

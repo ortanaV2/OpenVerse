@@ -267,6 +267,31 @@ void solar_system_init(void)
                        131.78422574, 44.96476227, -55.12002969, p, v);
     add_body_si("Neptune", 1.024e26, 24764.0, p, v, 0.25f,0.38f,0.95f, 0);
 
+    /* Ceres  (index 9) */
+    keplerian_to_state(2.76969657, 0.07600902, 10.59407162,
+                       80.30992285, 73.11734054, 77.37209589, p, v);
+    add_body_si("Ceres",     9.393e20,  476.2, p, v, 0.72f,0.68f,0.64f, 0);
+
+    /* Pluto  (index 10) */
+    keplerian_to_state(39.48211675, 0.24882730, 17.14001206,
+                       110.30393684, 224.06891629, 238.92903833, p, v);
+    add_body_si("Pluto",     1.303e22, 1188.3, p, v, 0.85f,0.78f,0.68f, 0);
+
+    /* Eris   (index 11) */
+    keplerian_to_state(67.6681, 0.44177, 44.0445,
+                       35.9531, 151.4305, 204.1574, p, v);
+    add_body_si("Eris",      1.660e22, 1163.0, p, v, 0.92f,0.92f,0.90f, 0);
+
+    /* Makemake (index 12) */
+    keplerian_to_state(45.4302, 0.15586, 28.9633,
+                       79.3812, 296.0481, 41.8866, p, v);
+    add_body_si("Makemake",  3.100e21,  715.0, p, v, 0.88f,0.72f,0.62f, 0);
+
+    /* Haumea (index 13) */
+    keplerian_to_state(43.1355, 0.19510, 28.2137,
+                       122.1030, 240.1972, 202.6739, p, v);
+    add_body_si("Haumea",    4.006e21,  620.0, p, v, 0.90f,0.88f,0.88f, 0);
+
     /* ---- Rotation ---- */
     set_rotation(0,   7.25,    25.38);    /* Sun     */
     set_rotation(1,   0.034,   58.646);   /* Mercury */
@@ -382,8 +407,9 @@ void solar_system_init(void)
      * T = 2π * sqrt(a³ / GM_SUN)  in days                    */
     {
         static const double a_AU[] =
-            { 0, 0.387, 0.723, 1.000, 1.524, 5.203, 9.537, 19.19, 30.07 };
-        for (i = 1; i <= 8; i++) {
+            { 0, 0.387, 0.723, 1.000, 1.524, 5.203, 9.537, 19.19, 30.07,
+              2.769, 39.48, 67.67, 45.43, 43.14 };
+        for (i = 1; i <= 13; i++) {
             double T_days = 2.0 * PI *
                 sqrt(a_AU[i]*a_AU[i]*a_AU[i] / GM_SUN);   /* days */
             g_bodies[i].trail_interval = (T_days / 200.0) * DAY;

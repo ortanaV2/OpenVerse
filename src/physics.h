@@ -1,18 +1,36 @@
 /*
- * physics.h — N-body gravitational physics (Leapfrog KDK integrator)
+ * physics.h — N-body gravitational physics (RESPA hierarchical integrator)
+ *
+ * Force decomposition:
+ *   Slow forces — primary-body interactions (planets among themselves, plus
+ *                 tidal perturbations from non-parent primaries on satellites).
+ *                 Updated once per outer step (~1 day).
+ *   Fast forces — dominant parent→satellite force.
+ *                 Updated every inner step (0.02 days) for orbital accuracy.
+ *
+ * Usage (each frame):
+ *   for each outer step:
+ *       physics_respa_begin(dt_outer);
+ *       for each inner step:
+ *           physics_respa_inner(dt_inner);
+ *           trails_tick(dt_inner);
+ *       physics_respa_end(dt_outer);
  */
 #pragma once
 #include "common.h"
 
-extern double g_sim_time;    /* total simulated seconds elapsed */
-extern double g_sim_speed;   /* simulated seconds per real second */
+extern double g_sim_time;
+extern double g_sim_speed;
 extern int    g_paused;
 
-/* Advance the simulation by dt seconds (SI units throughout) */
+/* RESPA split-step integrator — call begin/inner.../end per outer step */
+void physics_respa_begin(double dt_outer);  /* slow half-kick + prime fast acc  */
+void physics_respa_inner(double dt_inner);  /* fast KDK + drift all bodies      */
+void physics_respa_end  (double dt_outer);  /* slow half-kick + rotation + time */
+
+/* Legacy single-step KDK (kept for reference / one-off use) */
 void physics_step(double dt);
 
-/* Sample all body positions into their trail circular buffers (force all) */
+/* Trail helpers */
 void trails_sample(void);
-
-/* Advance per-body trail accumulators by dt seconds and sample when due */
 void trails_tick(double dt);

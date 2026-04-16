@@ -13,6 +13,7 @@
 #include "camera.h"
 #include "starfield.h"
 #include "trails.h"
+#include "rings.h"
 #include "labels.h"
 #include "gl_utils.h"
 #include "math3d.h"
@@ -31,7 +32,8 @@ static GLint  s_sp_center      = -1;
 static GLint  s_sp_radius      = -1;
 static GLint  s_sp_cam_right   = -1;
 static GLint  s_sp_cam_up      = -1;
-static GLint  s_sp_cam_pos     = -1;
+static GLint  s_sp_oc          = -1;   /* cam - center, double-precision diff */
+static GLint  s_sp_sun_rel     = -1;   /* sun - center, double-precision diff */
 static GLint  s_sp_cam_fwd     = -1;
 static GLint  s_sp_fov_tan     = -1;
 static GLint  s_sp_aspect      = -1;
@@ -82,7 +84,8 @@ void render_init(void) {
     s_sp_emission  = glGetUniformLocation(s_sphere_shader, "u_emission");
     s_sp_ambient   = glGetUniformLocation(s_sphere_shader, "u_ambient");
     s_sp_sun_world = glGetUniformLocation(s_sphere_shader, "u_sun_pos_world");
-    s_sp_cam_pos   = glGetUniformLocation(s_sphere_shader, "u_cam_pos");
+    s_sp_oc        = glGetUniformLocation(s_sphere_shader, "u_oc");
+    s_sp_sun_rel   = glGetUniformLocation(s_sphere_shader, "u_sun_rel");
     s_sp_cam_fwd   = glGetUniformLocation(s_sphere_shader, "u_cam_fwd");
     s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
     s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
@@ -166,7 +169,6 @@ void render_frame(const float view[16], const float proj[16],
     glUniform3f(s_sp_sun_world,  sun_wx, sun_wy, sun_wz);
     glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
     glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
-    glUniform3f(s_sp_cam_pos,    g_cam.pos[0], g_cam.pos[1], g_cam.pos[2]);
     glUniform3f(s_sp_cam_fwd,    cam_fwd[0],   cam_fwd[1],   cam_fwd[2]);
 
     glBindVertexArray(s_sphere_vao);
@@ -199,8 +201,22 @@ void render_frame(const float view[16], const float proj[16],
         float px = (WIN_H / 2.0f) * dr / (dcam * half_fov_tan() + 1e-9f);
         info[i].show   = (px < 2.5f) ? 1 : 0;
 
+        /* Compute oc = cam - center and sun_rel = sun - center in double
+         * to avoid float cancellation for small/distant bodies.           */
+        double cam_mx = (double)g_cam.pos[0] * AU;
+        double cam_my = (double)g_cam.pos[1] * AU;
+        double cam_mz = (double)g_cam.pos[2] * AU;
+        float oc_x = (float)((cam_mx - b->pos[0]) * RS);
+        float oc_y = (float)((cam_my - b->pos[1]) * RS);
+        float oc_z = (float)((cam_mz - b->pos[2]) * RS);
+        float sr_x = (float)((g_bodies[0].pos[0] - b->pos[0]) * RS);
+        float sr_y = (float)((g_bodies[0].pos[1] - b->pos[1]) * RS);
+        float sr_z = (float)((g_bodies[0].pos[2] - b->pos[2]) * RS);
+
         glUniform3f(s_sp_center,   wx, wy, wz);
         glUniform1f(s_sp_radius,   dr);
+        glUniform3f(s_sp_oc,       oc_x, oc_y, oc_z);
+        glUniform3f(s_sp_sun_rel,  sr_x, sr_y, sr_z);
         glUniform3f(s_sp_color,    b->col[0], b->col[1], b->col[2]);
         glUniform1f(s_sp_emission, b->is_star ? 1.0f : 0.0f);
         glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
@@ -296,7 +312,10 @@ void render_frame(const float view[16], const float proj[16],
         glBindVertexArray(0);
     }
 
-    /* ------------------------------------------------------------------ 4. Trails */
+    /* ------------------------------------------------------------------ 4. Rings */
+    rings_render(vp);
+
+    /* ------------------------------------------------------------------ 5. Trails */
     trails_render(vp);
 
     /* ------------------------------------------------------------------ 5. Labels */

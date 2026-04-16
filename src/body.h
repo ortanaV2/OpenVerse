@@ -11,6 +11,7 @@ typedef struct {
     double pos[3];         /* m, simulation frame             */
     double vel[3];         /* m/s                             */
     double acc[3];         /* m/s^2 (recomputed each step)    */
+    double fast_acc[3];    /* m/s^2 dominant parent force, RESPA inner step */
     float  col[3];         /* RGB display colour              */
     int    is_star;
     int    parent;         /* index of parent body (-1 = none) */

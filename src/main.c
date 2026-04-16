@@ -26,6 +26,7 @@
 #include "trails.h"
 #include "labels.h"
 #include "render.h"
+#include "rings.h"
 #include "ui.h"
 
 /* ------------------------------------------------------------------ globals */
@@ -104,6 +105,7 @@ static int app_init(void) {
 
 static void app_quit(void) {
     ui_shutdown();
+    rings_shutdown();
     render_shutdown();
     labels_shutdown();
     trails_gl_shutdown();
@@ -225,18 +227,26 @@ int main(int argc, char **argv) {
     starfield_init();
     trails_gl_init();
     render_init();
+    rings_init();
     labels_init();
     ui_init();
 
-    /* Trail warm-up: pre-simulate 2 years in 0.02-day steps.
-     * trails_tick() uses per-body intervals so moons fill their buffers
-     * with many orbits while planets accumulate ~730 daily samples. */
+    /* Trail warm-up: pre-simulate 2 years using RESPA.
+     * 730 outer steps × 50 inner steps = 36 500 inner steps total —
+     * identical resolution to the old 0.02-day loop but ~20× faster
+     * because slow forces are only evaluated at the outer (1-day) rate. */
     {
-        const double STEP        = DAY * 0.02;
-        const int    TOTAL_STEPS = (int)(365.0 * 2.0 / 0.02);
-        for (int i = 0; i < TOTAL_STEPS; i++) {
-            physics_step(STEP);
-            trails_tick(STEP);
+        const double STEP_OUTER  = DAY * 1.0;
+        const double STEP_INNER  = DAY * 0.02;
+        const int    N_INNER     = 50;
+        const int    OUTER_TOTAL = (int)(365.0 * 2.0 / 1.0);
+        for (int o = 0; o < OUTER_TOTAL; o++) {
+            physics_respa_begin(STEP_OUTER);
+            for (int i = 0; i < N_INNER; i++) {
+                physics_respa_inner(STEP_INNER);
+                trails_tick(STEP_INNER);
+            }
+            physics_respa_end(STEP_OUTER);
         }
     }
 
@@ -262,21 +272,30 @@ int main(int argc, char **argv) {
         /* Camera */
         camera_move(dt);
 
-        /* Physics */
+        /* Physics — RESPA hierarchical integrator
+         * Outer step ~1 day: slow forces (primary-primary + tidal).
+         * Inner step 0.02 days: fast forces (parent-satellite dominant).
+         * ~32× fewer pair evaluations than uniform 0.02-day stepping. */
         if (!g_paused && g_sim_speed > 0.0) {
             double sim_dt = g_sim_speed * dt;
-            /* Sub-step for stability: max 0.02 sim-days per step (~16
-             * steps per Phobos orbit, the fastest body in the system). */
-            int    steps  = 1;
-            double step   = sim_dt;
-            if (sim_dt > DAY * 0.02) {
-                steps = (int)(sim_dt / (DAY * 0.02)) + 1;
-                step  = sim_dt / steps;
+
+            const double DT_OUTER    = DAY * 1.0;
+            const double DT_INNER_MAX = DAY * 0.02;
+
+            int    outer_steps = (int)(sim_dt / DT_OUTER) + 1;
+            double dt_outer    = sim_dt / outer_steps;
+            int    n_inner     = (int)(dt_outer / DT_INNER_MAX) + 1;
+            double dt_inner    = dt_outer / n_inner;
+
+            for (int o = 0; o < outer_steps; o++) {
+                physics_respa_begin(dt_outer);
+                for (int i = 0; i < n_inner; i++) {
+                    physics_respa_inner(dt_inner);
+                    trails_tick(dt_inner);
+                }
+                physics_respa_end(dt_outer);
             }
-            for (int i = 0; i < steps; i++) {
-                physics_step(step);
-                trails_tick(step);
-            }
+            rings_tick(sim_dt);
         }
 
         /* Build matrices */
