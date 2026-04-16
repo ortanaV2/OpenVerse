@@ -294,7 +294,7 @@ int main(int argc, char **argv) {
 
         /* Render */
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-        render_frame(view, proj, view_rot);
+        render_frame(view, proj, view_rot, dt);
         SDL_GL_SwapWindow(s_win);
     }
 

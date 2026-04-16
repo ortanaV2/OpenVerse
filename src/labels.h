@@ -23,6 +23,7 @@ void labels_init(void);
  *   info  — per-body render data (array of g_nbodies entries)
  */
 void labels_render(const float view[16], const float proj[16],
-                   const float vp[16], const BodyRenderInfo *info);
+                   const float vp[16], const BodyRenderInfo *info,
+                   float dt);
 
 void labels_shutdown(void);

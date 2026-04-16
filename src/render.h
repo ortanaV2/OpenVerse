@@ -18,6 +18,6 @@ void render_init(void);
  *   view_rot — view matrix with translation stripped (for skybox)
  */
 void render_frame(const float view[16], const float proj[16],
-                  const float view_rot[16]);
+                  const float view_rot[16], float dt);
 
 void render_shutdown(void);

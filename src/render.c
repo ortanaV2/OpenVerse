@@ -140,7 +140,7 @@ void render_init(void) {
 
 /* ------------------------------------------------------------------ frame */
 void render_frame(const float view[16], const float proj[16],
-                  const float view_rot[16]) {
+                  const float view_rot[16], float dt) {
     /* Build combined VP */
     Mat4 vp;
     mat4_mul(vp, proj, view);
@@ -255,7 +255,7 @@ void render_frame(const float view[16], const float proj[16],
     trails_render(vp);
 
     /* ------------------------------------------------------------------ 5. Labels */
-    labels_render(view, proj, vp, info);
+    labels_render(view, proj, vp, info, dt);
 }
 
 /* ------------------------------------------------------------------ shutdown */

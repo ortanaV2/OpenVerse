@@ -36,6 +36,18 @@ static GLuint s_tex[MAX_BODIES];
 static int    s_tex_w[MAX_BODIES];
 static int    s_tex_h[MAX_BODIES];
 
+/* Hysteresis: label only turns on after SHOW_DELAY seconds of eligibility,
+ * and only turns off after HIDE_DELAY seconds of being blocked/absent.
+ * This prevents labels from flickering when they sit on the overlap boundary. */
+#define SHOW_DELAY 0.20f   /* s — must be eligible this long before appearing  */
+#define HIDE_DELAY 0.06f   /* s — must be blocked this long before disappearing */
+static float s_show_accum[MAX_BODIES];   /* time continuously eligible to show */
+static float s_hide_accum[MAX_BODIES];   /* time continuously blocked/off      */
+static int   s_active[MAX_BODIES];       /* current visible state (0/1)        */
+static float s_last_ax[MAX_BODIES];      /* cached world-space anchor (AU)     */
+static float s_last_ay[MAX_BODIES];
+static float s_last_az[MAX_BODIES];
+
 static TTF_Font *s_font = NULL;
 
 /* ------------------------------------------------------------------ font */
@@ -117,9 +129,15 @@ void labels_init(void) {
     }
 
     /* Pre-render one texture per body */
-    memset(s_tex,   0, sizeof(s_tex));
-    memset(s_tex_w, 0, sizeof(s_tex_w));
-    memset(s_tex_h, 0, sizeof(s_tex_h));
+    memset(s_tex,        0, sizeof(s_tex));
+    memset(s_tex_w,      0, sizeof(s_tex_w));
+    memset(s_tex_h,      0, sizeof(s_tex_h));
+    memset(s_show_accum, 0, sizeof(s_show_accum));
+    memset(s_hide_accum, 0, sizeof(s_hide_accum));
+    memset(s_active,     0, sizeof(s_active));
+    memset(s_last_ax,    0, sizeof(s_last_ax));
+    memset(s_last_ay,    0, sizeof(s_last_ay));
+    memset(s_last_az,    0, sizeof(s_last_az));
 
     for (int i = 0; i < g_nbodies; i++) {
         SDL_Color col;
@@ -134,7 +152,8 @@ void labels_init(void) {
 }
 
 void labels_render(const float view[16], const float proj[16],
-                   const float vp[16], const BodyRenderInfo *info) {
+                   const float vp[16], const BodyRenderInfo *info,
+                   float dt) {
     (void)proj;   /* reserved for future use (e.g. depth-sort) */
     if (!s_shader || !s_font) return;
 
@@ -156,11 +175,8 @@ void labels_render(const float view[16], const float proj[16],
         int is_sun = (i == 0);
         order[i]   = i;
         lvis[i]    = 0;
-        int is_moon = (g_bodies[i].parent >= 0);
-        if (!s_tex[i])                                    continue;
-        /* Moons: only label when rendered as a dot (too small to see) */
-        if (is_moon && !info[i].show)                     continue;
-        if (!is_sun && info[i].dcam > MAX_LABEL_DIST)     continue;
+        if (!s_tex[i])                                continue;
+        if (!is_sun && info[i].dcam > MAX_LABEL_DIST) continue;
 
         /* Anchor: just above the body centre */
         float ax = info[i].pos[0];
@@ -181,6 +197,10 @@ void labels_render(const float view[16], const float proj[16],
         lsw[i] = pw + LBL_PAD;
         lsh[i] = ph + LBL_PAD;
         lvis[i] = 1;
+        /* cache anchor for use during hide-delay fade-out */
+        s_last_ax[i] = ax;
+        s_last_ay[i] = ay;
+        s_last_az[i] = az;
     }
 
     /* ---- Step 2: priority order — Sun, then planets, then moons.
@@ -228,7 +248,22 @@ void labels_render(const float view[16], const float proj[16],
         }
     }
 
-    /* ---- Step 4: draw surviving labels ---- */
+    /* ---- Step 4: hysteresis — debounce lvis into s_active ---- */
+    for (int i = 0; i < g_nbodies; i++) {
+        if (lvis[i]) {
+            s_show_accum[i] += dt;
+            s_hide_accum[i]  = 0.0f;
+            if (s_show_accum[i] >= SHOW_DELAY)
+                s_active[i] = 1;
+        } else {
+            s_hide_accum[i] += dt;
+            s_show_accum[i]  = 0.0f;
+            if (s_hide_accum[i] >= HIDE_DELAY)
+                s_active[i] = 0;
+        }
+    }
+
+    /* ---- Step 5: draw surviving labels ---- */
     glUseProgram(s_shader);
     glUniformMatrix4fv(s_loc_vp, 1, GL_FALSE, vp);
     glUniform1i(s_loc_tex, 0);
@@ -242,17 +277,17 @@ void labels_render(const float view[16], const float proj[16],
     glBindVertexArray(s_vao);
 
     for (int i = 0; i < g_nbodies; i++) {
-        if (!lvis[i])  continue;
-        if (!s_tex[i]) continue;
+        if (!s_active[i]) continue;
+        if (!s_tex[i])    continue;
 
         /* World-space label dimensions */
         float fh = (info[i].dcam * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;
         float fw = fh * (float)s_tex_w[i] / (float)s_tex_h[i];
 
-        /* Anchor = just above body, shifted slightly right */
-        float ax = info[i].pos[0] + cam_right[0]*(fw*0.1f);
-        float ay = info[i].pos[1] + info[i].dr*1.4f + cam_up[1]*(fh*0.1f);
-        float az = info[i].pos[2] + cam_right[2]*(fw*0.1f);
+        /* Use cached anchor (valid even during hide-delay when lvis[i]=0) */
+        float ax = s_last_ax[i] + cam_right[0]*(fw*0.1f);
+        float ay = s_last_ay[i]              + cam_up[1]*(fh*0.1f);
+        float az = s_last_az[i] + cam_right[2]*(fw*0.1f);
 
         Vec3 right_scaled, up_scaled;
         vec3_scale(right_scaled, cam_right, fw);
