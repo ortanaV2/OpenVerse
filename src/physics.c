@@ -66,17 +66,39 @@ void physics_step(double dt) {
         g_bodies[i].vel[1] += 0.5 * g_bodies[i].acc[1] * dt;
         g_bodies[i].vel[2] += 0.5 * g_bodies[i].acc[2] * dt;
     }
+    /* Spin each body around its own axis */
+    for (i = 0; i < g_nbodies; i++) {
+        g_bodies[i].rotation_angle =
+            fmod(g_bodies[i].rotation_angle + g_bodies[i].rotation_rate * dt,
+                 2.0 * PI);
+    }
+
     g_sim_time += dt;
+}
+
+static void sample_body(Body *b) {
+    b->trail[b->trail_head][0] = (float)(b->pos[0] * RS);
+    b->trail[b->trail_head][1] = (float)(b->pos[1] * RS);
+    b->trail[b->trail_head][2] = (float)(b->pos[2] * RS);
+    b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
+    if (b->trail_count < TRAIL_LEN) b->trail_count++;
 }
 
 void trails_sample(void) {
     int i;
+    for (i = 0; i < g_nbodies; i++)
+        sample_body(&g_bodies[i]);
+}
+
+void trails_tick(double dt) {
+    int i;
     for (i = 0; i < g_nbodies; i++) {
         Body *b = &g_bodies[i];
-        b->trail[b->trail_head][0] = (float)(b->pos[0] * RS);
-        b->trail[b->trail_head][1] = (float)(b->pos[1] * RS);
-        b->trail[b->trail_head][2] = (float)(b->pos[2] * RS);
-        b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
-        if (b->trail_count < TRAIL_LEN) b->trail_count++;
+        if (b->trail_interval <= 0.0) continue;
+        b->trail_accum += dt;
+        if (b->trail_accum >= b->trail_interval) {
+            b->trail_accum -= b->trail_interval;
+            sample_body(b);
+        }
     }
 }

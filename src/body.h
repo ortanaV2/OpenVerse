@@ -13,8 +13,16 @@ typedef struct {
     double acc[3];         /* m/s^2 (recomputed each step)    */
     float  col[3];         /* RGB display colour              */
     int    is_star;
+    int    parent;         /* index of parent body (-1 = none) */
+
+    /* Rotation */
+    double obliquity;       /* axial tilt in degrees (from ecliptic north)  */
+    double rotation_rate;   /* rad/s (positive = prograde)                  */
+    double rotation_angle;  /* current rotation phase, rad (0..2π)          */
 
     /* Orbital trail (circular buffer, positions in GL/AU units) */
+    double trail_interval;     /* sim-seconds between samples (per-body)   */
+    double trail_accum;        /* accumulator toward next sample            */
     int    trail_head;
     int    trail_count;
     float  trail[TRAIL_LEN][3];

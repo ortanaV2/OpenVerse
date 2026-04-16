@@ -34,10 +34,10 @@
 #define DAY        86400.0           /* s per day                        */
 #define G_CONST    6.674e-11         /* m^3 kg^-1 s^-2                   */
 #define GM_SUN     2.9591220828559093e-4  /* AU^3/day^2                 */
-#define SOFTENING  1e9               /* collision softening radius (m)   */
+#define SOFTENING  1e5               /* collision softening radius (m)   */
 
 /* ------------------------------------------------------------------ sim */
-#define MAX_BODIES          64
+#define MAX_BODIES         128
 #define TRAIL_LEN         2048
 #define NUM_STARS          4000
 

@@ -156,8 +156,10 @@ void labels_render(const float view[16], const float proj[16],
         int is_sun = (i == 0);
         order[i]   = i;
         lvis[i]    = 0;
+        int is_moon = (g_bodies[i].parent >= 0);
         if (!s_tex[i])                                    continue;
-        if (!is_sun && !info[i].show)                     continue;
+        /* Moons: only label when rendered as a dot (too small to see) */
+        if (is_moon && !info[i].show)                     continue;
         if (!is_sun && info[i].dcam > MAX_LABEL_DIST)     continue;
 
         /* Anchor: just above the body centre */
@@ -181,15 +183,33 @@ void labels_render(const float view[16], const float proj[16],
         lvis[i] = 1;
     }
 
-    /* ---- Step 2: sort by distance (closest = highest priority, Sun pinned 0) ---- */
-    order[0] = 0;
-    for (int i = 1; i < g_nbodies; i++) order[i] = i;
-    for (int i = 2; i < g_nbodies; i++) {
-        int tmp = order[i], k = i;
-        while (k > 1 && info[order[k-1]].dcam > info[tmp].dcam) {
-            order[k] = order[k-1]; k--;
+    /* ---- Step 2: priority order — Sun, then planets, then moons.
+     * Within planets and within moons: sorted by camera distance (closest first).
+     * This guarantees planet labels always win over moon labels in overlap removal. */
+    {
+        int np = 0, nm = 0;
+        int planets[MAX_BODIES], moons[MAX_BODIES];
+        for (int i = 1; i < g_nbodies; i++) {
+            if (g_bodies[i].parent < 0) planets[np++] = i;
+            else                        moons  [nm++] = i;
         }
-        order[k] = tmp;
+        /* insertion-sort planets by dcam */
+        for (int i = 1; i < np; i++) {
+            int tmp = planets[i], k = i;
+            while (k > 0 && info[planets[k-1]].dcam > info[tmp].dcam)
+                { planets[k] = planets[k-1]; k--; }
+            planets[k] = tmp;
+        }
+        /* insertion-sort moons by dcam */
+        for (int i = 1; i < nm; i++) {
+            int tmp = moons[i], k = i;
+            while (k > 0 && info[moons[k-1]].dcam > info[tmp].dcam)
+                { moons[k] = moons[k-1]; k--; }
+            moons[k] = tmp;
+        }
+        order[0] = 0;   /* Sun always first */
+        for (int i = 0; i < np; i++) order[1 + i]        = planets[i];
+        for (int i = 0; i < nm; i++) order[1 + np + i]   = moons[i];
     }
 
     /* ---- Step 3: greedy AABB overlap removal ---- */
@@ -222,9 +242,8 @@ void labels_render(const float view[16], const float proj[16],
     glBindVertexArray(s_vao);
 
     for (int i = 0; i < g_nbodies; i++) {
-        int is_sun = (i == 0);
-        if (!lvis[i] && !is_sun) continue;
-        if (!s_tex[i])           continue;
+        if (!lvis[i])  continue;
+        if (!s_tex[i]) continue;
 
         /* World-space label dimensions */
         float fh = (info[i].dcam * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;

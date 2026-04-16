@@ -11,5 +11,8 @@ extern int    g_paused;
 /* Advance the simulation by dt seconds (SI units throughout) */
 void physics_step(double dt);
 
-/* Sample all body positions into their trail circular buffers */
+/* Sample all body positions into their trail circular buffers (force all) */
 void trails_sample(void);
+
+/* Advance per-body trail accumulators by dt seconds and sample when due */
+void trails_tick(double dt);
