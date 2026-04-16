@@ -62,9 +62,20 @@ void main() {
 
     /* ---- emissive (sun / stars) ---------------------------------------- */
     if (u_emission > 0.5) {
-        float cosA = max(dot(N, -ray_dir), 0.0);
-        float limb = 0.75 + 0.25 * cosA;
-        frag_color = vec4(u_color * limb, 1.0);
+        float mu = max(dot(N, -ray_dir), 0.0);   /* 1 at disc centre, 0 at limb */
+
+        /* Quadratic limb darkening (Claret 2000, visual band)
+         * I(µ) = 1 − 0.38·(1−µ) − 0.31·(1−µ)²                           */
+        float one_mu = 1.0 - mu;
+        float limb   = 1.0 - 0.38 * one_mu - 0.31 * one_mu * one_mu;
+
+        /* Disc is white — the additive glow pass provides the star's colour.
+         * A very faint warmth at the limb (one_mu term) keeps it from looking
+         * sterile; the limb-darkening already makes the edge dim anyway.     */
+        vec3 white = vec3(1.0, 0.98, 0.95);
+        vec3 disc  = mix(white, u_color, 0.15 * one_mu);
+
+        frag_color = vec4(disc * limb, 1.0);
         return;
     }
 

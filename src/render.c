@@ -48,6 +48,15 @@ static GLuint s_dot_vao     = 0;
 static GLuint s_dot_vbo     = 0;
 static GLint  s_dot_vp      = -1;
 
+/* ------------------------------------------------------------------ star glare */
+static GLuint s_glare_shader = 0;
+static GLint  s_gl_vp        = -1;
+static GLint  s_gl_center    = -1;
+static GLint  s_gl_radius    = -1;
+static GLint  s_gl_right     = -1;
+static GLint  s_gl_up        = -1;
+static GLint  s_gl_color     = -1;
+
 /* ------------------------------------------------------------------ helpers */
 static float half_fov_tan(void) {
     return tanf(FOV * 0.5f * (float)(PI / 180.0));
@@ -111,6 +120,20 @@ void render_init(void) {
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2*sizeof(float), (void*)0);
     glBindVertexArray(0);
+
+    /* --- Star glare shader --- */
+    s_glare_shader = gl_shader_load("assets/shaders/star_glare.vert",
+                                    "assets/shaders/star_glare.frag");
+    if (!s_glare_shader)
+        fprintf(stderr, "[Render] star_glare shader failed\n");
+    else {
+        s_gl_vp     = glGetUniformLocation(s_glare_shader, "u_vp");
+        s_gl_center = glGetUniformLocation(s_glare_shader, "u_center");
+        s_gl_radius = glGetUniformLocation(s_glare_shader, "u_radius");
+        s_gl_right  = glGetUniformLocation(s_glare_shader, "u_cam_right");
+        s_gl_up     = glGetUniformLocation(s_glare_shader, "u_cam_up");
+        s_gl_color  = glGetUniformLocation(s_glare_shader, "u_color");
+    }
 
     /* --- Dot shader (reuses color.vert / color.frag) --- */
     s_dot_shader = gl_shader_load("assets/shaders/color.vert",
@@ -324,7 +347,47 @@ void render_frame(const float view[16], const float proj[16],
     /* ------------------------------------------------------------------ 5. Trails */
     trails_render(vp_camrel);
 
-    /* ------------------------------------------------------------------ 6. Labels */
+    /* ------------------------------------------------------------------ 6. Star glare
+     * Additive (GL_ONE / GL_ONE) pass over all opaque geometry.
+     * Depth test and depth writes are both disabled — the glare is a camera
+     * lens effect and should always be visible regardless of scene depth.
+     * Only drawn when the star is roughly in front of the camera.           */
+    if (s_glare_shader) {
+        glUseProgram(s_glare_shader);
+        glUniformMatrix4fv(s_gl_vp, 1, GL_FALSE, vp);
+        glUniform3f(s_gl_right, cam_right[0], cam_right[1], cam_right[2]);
+        glUniform3f(s_gl_up,    cam_up[0],    cam_up[1],    cam_up[2]);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);   /* additive */
+        glDepthMask(GL_FALSE);
+        glDisable(GL_DEPTH_TEST);
+
+        glBindVertexArray(s_sphere_vao);
+
+        for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].is_star) continue;
+
+            /* Skip if star is behind the camera */
+            float dx = info[i].pos[0] - g_cam.pos[0];
+            float dy = info[i].pos[1] - g_cam.pos[1];
+            float dz = info[i].pos[2] - g_cam.pos[2];
+            if (dx*cam_fwd[0] + dy*cam_fwd[1] + dz*cam_fwd[2] < 0.0f) continue;
+
+            glUniform3f(s_gl_center, info[i].pos[0], info[i].pos[1], info[i].pos[2]);
+            glUniform1f(s_gl_radius, info[i].dr);
+            glUniform3f(s_gl_color,
+                        g_bodies[i].col[0], g_bodies[i].col[1], g_bodies[i].col[2]);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
+
+        glBindVertexArray(0);
+        glEnable(GL_DEPTH_TEST);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
+
+    /* ------------------------------------------------------------------ 7. Labels */
     labels_render(view, proj, vp_camrel, info, dt);
 }
 
@@ -332,6 +395,7 @@ void render_frame(const float view[16], const float proj[16],
 void render_shutdown(void) {
     glDeleteProgram(s_sphere_shader);
     glDeleteProgram(s_dot_shader);
+    glDeleteProgram(s_glare_shader);
     glDeleteBuffers(1, &s_sphere_vbo);
     glDeleteBuffers(1, &s_sphere_ebo);
     glDeleteVertexArrays(1, &s_sphere_vao);
