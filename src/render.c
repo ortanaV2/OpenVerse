@@ -237,7 +237,10 @@ void render_frame(const float view[16], const float proj[16],
     glDisable(GL_BLEND);
 
     glUseProgram(s_sphere_shader);
-    glUniformMatrix4fv(s_sp_vp,       1, GL_FALSE, vp);
+    /* Camera-relative VP (proj × view_rot, no translation).
+     * u_center is passed as camera-relative below, so float32 cancellation
+     * at large world-space distances is avoided — same pattern as dots/trails. */
+    glUniformMatrix4fv(s_sp_vp,       1, GL_FALSE, vp_camrel);
     glUniform3f(s_sp_sun_world,  sun_wx, sun_wy, sun_wz);
     glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
     glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
@@ -290,7 +293,10 @@ void render_frame(const float view[16], const float proj[16],
         float sr_y = (float)((g_bodies[0].pos[1] - b->pos[1]) * RS);
         float sr_z = (float)((g_bodies[0].pos[2] - b->pos[2]) * RS);
 
-        glUniform3f(s_sp_center,   wx, wy, wz);
+        /* u_center is camera-relative (= -u_oc) so the billboard vertex
+         * positions computed in phong.vert are free of float32 world-space
+         * cancellation for nearby bodies (Phobos, Deimos, etc.).           */
+        glUniform3f(s_sp_center,  -oc_x, -oc_y, -oc_z);
         glUniform1f(s_sp_radius,   dr);
         glUniform3f(s_sp_oc,       oc_x, oc_y, oc_z);
         glUniform3f(s_sp_sun_rel,  sr_x, sr_y, sr_z);
