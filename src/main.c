@@ -299,9 +299,9 @@ int main(int argc, char **argv) {
                     trails_tick(dt_inner);
                 }
                 physics_respa_end(dt_outer);
+                asteroids_step(dt_outer);   /* test-particle gravity */
             }
             rings_tick(sim_dt);
-            asteroids_tick(sim_dt);
         }
 
         /* Build matrices */
