@@ -42,6 +42,7 @@ static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
 static GLint  s_sp_sun_world   = -1;
 static GLint  s_sp_rotation    = -1;
+static GLint  s_sp_obliquity   = -1;
 static GLint  s_sp_ptype       = -1;
 
 /* Planet-type mapping by body index (matches solar_system_init order).
@@ -140,6 +141,7 @@ void render_init(void) {
     s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
     s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
     s_sp_rotation  = glGetUniformLocation(s_sphere_shader, "u_rotation");
+    s_sp_obliquity = glGetUniformLocation(s_sphere_shader, "u_obliquity");
     s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
 
     /* Frame-constant camera parameters */
@@ -305,7 +307,8 @@ void render_frame(const float view[16], const float proj[16],
         glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
 
         /* Procedural surface texture uniforms */
-        glUniform1f(s_sp_rotation, (float)b->rotation_angle);
+        glUniform1f(s_sp_rotation,  (float)b->rotation_angle);
+        glUniform1f(s_sp_obliquity, (float)(b->obliquity * (PI / 180.0)));
         {
             int ptype = (i < (int)(sizeof(s_planet_types)/sizeof(s_planet_types[0])))
                         ? s_planet_types[i] : 0;

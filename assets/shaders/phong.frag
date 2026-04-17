@@ -36,7 +36,8 @@ uniform vec3  u_cam_fwd;
 uniform float u_fov_tan;
 uniform float u_aspect;
 
-uniform float u_rotation;     /* body rotation angle, radians (Y-axis) */
+uniform float u_rotation;     /* body rotation angle, radians           */
+uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
 uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
 
 out vec4 frag_color;
@@ -217,12 +218,30 @@ void main() {
     }
 
     /* ---- procedural surface texture ----------------------------------- */
-    /* Rotate N into body-local frame (Y-axis rotation by -u_rotation)    */
-    float cr = cos(-u_rotation);
-    float sr = sin(-u_rotation);
-    vec3 NL  = vec3(N.x * cr - N.z * sr,
-                    N.y,
-                    N.x * sr + N.z * cr);
+    /* Rotate N into body-local frame.
+     * The spin axis is tilted from ecliptic-north (Y) toward +X by the
+     * body's obliquity: axis = (sin(obl), cos(obl), 0).
+     * Apply the inverse body rotation (Rodrigues, angle = -u_rotation).
+     * When u_obliquity == 0 this reduces to a plain Y-axis rotation.    */
+    vec3 NL;
+    {
+        /* Step 1 — undo axial tilt: rotate N around Z by +obliquity.
+         * This maps the tilted spin axis back onto the Y axis so the
+         * subsequent Y-rotation is a simple spin around the new Y.     */
+        float co = cos(u_obliquity);
+        float so = sin(u_obliquity);
+        float tx =  co * N.x - so * N.y;
+        float ty =  so * N.x + co * N.y;
+        float tz =  N.z;
+
+        /* Step 2 — undo body spin: plain Y-axis rotation (same convention
+         * as the original no-tilt code).                                */
+        float cr = cos(-u_rotation);
+        float sr = sin(-u_rotation);
+        NL = vec3(tx * cr - tz * sr,
+                  ty,
+                  tx * sr + tz * cr);
+    }
 
     vec3 surface = surface_color(NL);
 
