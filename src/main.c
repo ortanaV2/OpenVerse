@@ -27,6 +27,7 @@
 #include "labels.h"
 #include "render.h"
 #include "rings.h"
+#include "asteroids.h"
 #include "ui.h"
 
 /* ------------------------------------------------------------------ globals */
@@ -105,6 +106,7 @@ static int app_init(void) {
 
 static void app_quit(void) {
     ui_shutdown();
+    asteroids_shutdown();
     rings_shutdown();
     render_shutdown();
     labels_shutdown();
@@ -230,6 +232,7 @@ int main(int argc, char **argv) {
     trails_gl_init();
     render_init();
     rings_init();
+    asteroids_init();
     labels_init();
     ui_init();
 
@@ -298,6 +301,7 @@ int main(int argc, char **argv) {
                 physics_respa_end(dt_outer);
             }
             rings_tick(sim_dt);
+            asteroids_tick(sim_dt);
         }
 
         /* Build matrices */

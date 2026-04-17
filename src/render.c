@@ -14,6 +14,7 @@
 #include "starfield.h"
 #include "trails.h"
 #include "rings.h"
+#include "asteroids.h"
 #include "labels.h"
 #include "gl_utils.h"
 #include "math3d.h"
@@ -82,6 +83,59 @@ static const int s_planet_types[] = {
     0,          /* 30 Titania  */
     0,          /* 31 Oberon   */
     0,          /* 32 Triton   */
+};
+
+/* ------------------------------------------------------------------ atmosphere */
+static GLuint s_atm_shader   = 0;
+static GLint  s_at_vp        = -1;
+static GLint  s_at_center    = -1;
+static GLint  s_at_radius    = -1;
+static GLint  s_at_cam_right = -1;
+static GLint  s_at_cam_up    = -1;
+static GLint  s_at_cam_fwd   = -1;
+static GLint  s_at_oc        = -1;
+static GLint  s_at_planet_r  = -1;
+static GLint  s_at_sun_rel   = -1;
+static GLint  s_at_color     = -1;
+static GLint  s_at_intensity = -1;
+
+/* Per-body atmosphere: {R, G, B, intensity, scale}
+ * scale:     outer atmosphere radius as multiple of planet radius.
+ * intensity: peak glow strength (0.0 = no atmosphere).            */
+static const float s_atm[][5] = {
+    {0,0,0,  0.00f, 0.00f},              /*  0 Sun       */
+    {0,0,0,  0.00f, 0.00f},              /*  1 Mercury   */
+    {0.92f,0.84f,0.56f, 0.78f, 1.50f},  /*  2 Venus — thick yellow-white */
+    {0.45f,0.65f,1.00f, 0.60f, 1.30f},  /*  3 Earth — blue rim           */
+    {0.85f,0.45f,0.25f, 0.35f, 1.22f},  /*  4 Mars  — thin pinkish       */
+    {0.90f,0.72f,0.50f, 0.32f, 1.25f},  /*  5 Jupiter                    */
+    {0.90f,0.82f,0.62f, 0.28f, 1.25f},  /*  6 Saturn                     */
+    {0.60f,0.90f,1.00f, 0.23f, 1.25f},  /*  7 Uranus                     */
+    {0.30f,0.50f,1.00f, 0.23f, 1.25f},  /*  8 Neptune                    */
+    {0,0,0,  0.00f, 0.00f},              /*  9 Ceres     */
+    {0,0,0,  0.00f, 0.00f},              /* 10 Pluto     */
+    {0,0,0,  0.00f, 0.00f},              /* 11 Eris      */
+    {0,0,0,  0.00f, 0.00f},              /* 12 Makemake  */
+    {0,0,0,  0.00f, 0.00f},              /* 13 Haumea    */
+    {0,0,0,  0.00f, 0.00f},              /* 14 Moon      */
+    {0,0,0,  0.00f, 0.00f},              /* 15 Phobos    */
+    {0,0,0,  0.00f, 0.00f},              /* 16 Deimos    */
+    {0,0,0,  0.00f, 0.00f},              /* 17 Io        */
+    {0,0,0,  0.00f, 0.00f},              /* 18 Europa    */
+    {0,0,0,  0.00f, 0.00f},              /* 19 Ganymede  */
+    {0,0,0,  0.00f, 0.00f},              /* 20 Callisto  */
+    {0,0,0,  0.00f, 0.00f},              /* 21 Mimas     */
+    {0,0,0,  0.00f, 0.00f},              /* 22 Enceladus */
+    {0,0,0,  0.00f, 0.00f},              /* 23 Tethys    */
+    {0,0,0,  0.00f, 0.00f},              /* 24 Dione     */
+    {0,0,0,  0.00f, 0.00f},              /* 25 Rhea      */
+    {0.75f,0.50f,0.20f, 0.78f, 1.45f},  /* 26 Titan — dense orange haze  */
+    {0,0,0,  0.00f, 0.00f},              /* 27 Miranda   */
+    {0,0,0,  0.00f, 0.00f},              /* 28 Ariel     */
+    {0,0,0,  0.00f, 0.00f},              /* 29 Umbriel   */
+    {0,0,0,  0.00f, 0.00f},              /* 30 Titania   */
+    {0,0,0,  0.00f, 0.00f},              /* 31 Oberon    */
+    {0,0,0,  0.00f, 0.00f},              /* 32 Triton    */
 };
 
 /* ------------------------------------------------------------------ dots */
@@ -178,6 +232,32 @@ void render_init(void) {
         s_gl_right  = glGetUniformLocation(s_glare_shader, "u_cam_right");
         s_gl_up     = glGetUniformLocation(s_glare_shader, "u_cam_up");
         s_gl_color  = glGetUniformLocation(s_glare_shader, "u_color");
+    }
+
+    /* --- Atmosphere shader --- */
+    s_atm_shader = gl_shader_load("assets/shaders/atm.vert",
+                                  "assets/shaders/atm.frag");
+    if (!s_atm_shader)
+        fprintf(stderr, "[Render] atm shader failed\n");
+    else {
+        s_at_vp        = glGetUniformLocation(s_atm_shader, "u_vp");
+        s_at_center    = glGetUniformLocation(s_atm_shader, "u_center");
+        s_at_radius    = glGetUniformLocation(s_atm_shader, "u_radius");
+        s_at_cam_right = glGetUniformLocation(s_atm_shader, "u_cam_right");
+        s_at_cam_up    = glGetUniformLocation(s_atm_shader, "u_cam_up");
+        s_at_cam_fwd   = glGetUniformLocation(s_atm_shader, "u_cam_fwd");
+        s_at_oc        = glGetUniformLocation(s_atm_shader, "u_oc");
+        s_at_planet_r  = glGetUniformLocation(s_atm_shader, "u_planet_radius");
+        s_at_sun_rel   = glGetUniformLocation(s_atm_shader, "u_sun_rel");
+        s_at_color     = glGetUniformLocation(s_atm_shader, "u_atm_color");
+        s_at_intensity = glGetUniformLocation(s_atm_shader, "u_atm_intensity");
+        /* Frame-constant uniforms */
+        glUseProgram(s_atm_shader);
+        glUniform1f(glGetUniformLocation(s_atm_shader, "u_fov_tan"),
+                    tanf(FOV * 0.5f * (float)(PI / 180.0)));
+        glUniform1f(glGetUniformLocation(s_atm_shader, "u_aspect"),
+                    (float)WIN_W / (float)WIN_H);
+        glUseProgram(0);
     }
 
     /* --- Dot shader (reuses color.vert / color.frag) --- */
@@ -319,6 +399,59 @@ void render_frame(const float view[16], const float proj[16],
     }
     glBindVertexArray(0);
 
+    /* ------------------------------------------------------------------ 2.5. Atmosphere glow
+     * Additive pass (GL_SRC_ALPHA / GL_ONE), depth-tested but no depth writes.
+     * Uses the same sphere billboard VAO and camera-relative VP as the sphere pass. */
+    if (s_atm_shader) {
+        const int N_ATM = (int)(sizeof(s_atm) / sizeof(s_atm[0]));
+
+        glUseProgram(s_atm_shader);
+        glUniformMatrix4fv(s_at_vp, 1, GL_FALSE, vp_camrel);
+        glUniform3f(s_at_cam_right, cam_right[0], cam_right[1], cam_right[2]);
+        glUniform3f(s_at_cam_up,    cam_up[0],    cam_up[1],    cam_up[2]);
+        glUniform3f(s_at_cam_fwd,   cam_fwd[0],   cam_fwd[1],   cam_fwd[2]);
+
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE);  /* additive */
+        glDepthMask(GL_FALSE);              /* read depth, don't write */
+        glEnable(GL_DEPTH_TEST);
+        glBindVertexArray(s_sphere_vao);
+
+        for (int i = 0; i < g_nbodies && i < N_ATM; i++) {
+            if (info[i].show) continue;     /* sub-pixel body — skip */
+            float intensity = s_atm[i][3];
+            float scale     = s_atm[i][4];
+            if (intensity <= 0.0f) continue;
+
+            Body *b = &g_bodies[i];
+            double cam_mx = (double)g_cam.pos[0] * AU;
+            double cam_my = (double)g_cam.pos[1] * AU;
+            double cam_mz = (double)g_cam.pos[2] * AU;
+            float oc_x = (float)((cam_mx - b->pos[0]) * RS);
+            float oc_y = (float)((cam_my - b->pos[1]) * RS);
+            float oc_z = (float)((cam_mz - b->pos[2]) * RS);
+            float sr_x = (float)((g_bodies[0].pos[0] - b->pos[0]) * RS);
+            float sr_y = (float)((g_bodies[0].pos[1] - b->pos[1]) * RS);
+            float sr_z = (float)((g_bodies[0].pos[2] - b->pos[2]) * RS);
+
+            float planet_r = info[i].dr;
+            float atm_r    = planet_r * scale;
+
+            glUniform3f(s_at_center,   -oc_x, -oc_y, -oc_z);
+            glUniform1f(s_at_radius,    atm_r);
+            glUniform1f(s_at_planet_r,  planet_r);
+            glUniform3f(s_at_oc,        oc_x, oc_y, oc_z);
+            glUniform3f(s_at_sun_rel,   sr_x, sr_y, sr_z);
+            glUniform3f(s_at_color,     s_atm[i][0], s_atm[i][1], s_atm[i][2]);
+            glUniform1f(s_at_intensity, intensity);
+            glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+        }
+
+        glBindVertexArray(0);
+        glDepthMask(GL_TRUE);
+        glDisable(GL_BLEND);
+    }
+
     /* ------------------------------------------------------------------ 3. Center dots
      * Priority: Sun(0) > planets > moons. Within each tier: closer first.
      * Overlap check in screen space: two dots clash if their centres are
@@ -416,8 +549,11 @@ void render_frame(const float view[16], const float proj[16],
         glBindVertexArray(0);
     }
 
-    /* ------------------------------------------------------------------ 4. Rings */
+    /* ------------------------------------------------------------------ 4. Rings + Asteroid belts */
     rings_render(vp);
+    asteroids_render(vp_camrel,
+                     (float)g_cam.pos[0], (float)g_cam.pos[1], (float)g_cam.pos[2],
+                     cam_right, cam_up, cam_fwd);
 
     /* ------------------------------------------------------------------ 5. Trails */
     trails_render(vp_camrel);
@@ -469,6 +605,7 @@ void render_frame(const float view[16], const float proj[16],
 /* ------------------------------------------------------------------ shutdown */
 void render_shutdown(void) {
     glDeleteProgram(s_sphere_shader);
+    glDeleteProgram(s_atm_shader);
     glDeleteProgram(s_dot_shader);
     glDeleteProgram(s_glare_shader);
     glDeleteBuffers(1, &s_sphere_vbo);
