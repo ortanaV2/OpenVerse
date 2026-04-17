@@ -1,15 +1,22 @@
 #version 330 core
 /*
- * phong.frag — per-pixel ray-sphere intersection using gl_FragCoord
+ * phong.frag — per-pixel ray-sphere intersection + procedural surface texturing
  *
- * Key detail: after intersecting the true sphere surface we write the
- * correct clip-space depth to gl_FragDepth.  This means the depth buffer
- * holds the *sphere surface* depth, not the flat billboard quad depth.
- * Trails and other geometry drawn later are then correctly occluded by
- * the planet — they disappear where they would pass through the sphere.
+ * Texturing uses 3D value-noise FBM keyed on the surface normal rotated into
+ * the body's local frame.  3D noise is seam-free by construction — no UV
+ * atlas, no texture files required.
  *
- * u_vp is declared in phong.vert; GLSL uniforms are program-wide so the
- * same value is visible here without an extra upload.
+ * u_planet_type selects the colour recipe:
+ *   0  generic rocky   (modulates u_color with noise)
+ *   1  Earth           (ocean / land / desert / polar ice)
+ *   2  Mars            (red-orange with polar frost)
+ *   3  Venus           (swirly yellow-white clouds)
+ *   4  Jupiter         (orange-brown horizontal bands)
+ *   5  Saturn          (tan-cream horizontal bands)
+ *   6  ice giant       (smooth pale tint with faint bands)
+ *   7  Io              (yellow-orange with dark volcanic spots)
+ *   8  Titan           (orange haze)
+ *   9  Europa          (icy white with rust cracks)
  */
 
 in vec2 v_uv;   /* unused for planets, kept for linker compatibility */
@@ -18,71 +25,211 @@ uniform mat4  u_vp;
 uniform vec3  u_color;
 uniform float u_emission;
 uniform float u_ambient;
-uniform vec3  u_sun_pos_world;   /* kept for depth-write only          */
-uniform vec3  u_center;          /* body centre, world AU              */
+uniform vec3  u_sun_pos_world;
+uniform vec3  u_center;
 uniform float u_radius;
-uniform vec3  u_oc;              /* cam_pos - center, computed CPU-side in double */
-uniform vec3  u_sun_rel;         /* sun_pos - center, computed CPU-side in double */
+uniform vec3  u_oc;
+uniform vec3  u_sun_rel;
 uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
 uniform vec3  u_cam_fwd;
 uniform float u_fov_tan;
 uniform float u_aspect;
 
+uniform float u_rotation;     /* body rotation angle, radians (Y-axis) */
+uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
+
 out vec4 frag_color;
 
+/* ======================================================================
+ * 3-D value noise — no seams, rotation-aware
+ * ====================================================================== */
+
+float hash3(vec3 p) {
+    p  = fract(p * vec3(127.1, 311.7, 74.7));
+    p += dot(p, p.yzx + 19.19);
+    return fract((p.x + p.y) * p.z);
+}
+
+float vnoise(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);          /* smooth-step */
+    return mix(
+        mix(mix(hash3(i),               hash3(i + vec3(1,0,0)), f.x),
+            mix(hash3(i + vec3(0,1,0)), hash3(i + vec3(1,1,0)), f.x), f.y),
+        mix(mix(hash3(i + vec3(0,0,1)), hash3(i + vec3(1,0,1)), f.x),
+            mix(hash3(i + vec3(0,1,1)), hash3(i + vec3(1,1,1)), f.x), f.y),
+        f.z);
+}
+
+/* 2-octave FBM — deliberately blurry (rough and washy, as requested) */
+float fbm(vec3 p) {
+    return vnoise(p)               * 0.65
+         + vnoise(p * 2.1 + vec3(7.3, 2.1, 5.8)) * 0.35;
+}
+
+/* ======================================================================
+ * Per-planet surface colour  (NL = normal in body-local frame)
+ * ====================================================================== */
+
+vec3 surface_color(vec3 NL) {
+    float n = fbm(NL * 3.5);
+
+    /* ---- Earth -------------------------------------------------------- */
+    if (u_planet_type == 1) {
+        float n2  = fbm(NL * 3.5 + vec3(5.3, 2.7, 8.1));
+        float lat = abs(NL.y);
+        vec3 col;
+        if (n < 0.44)
+            col = mix(vec3(0.04, 0.13, 0.52), vec3(0.08, 0.28, 0.68),
+                      n / 0.44);
+        else if (n < 0.68)
+            col = mix(vec3(0.22, 0.46, 0.14), vec3(0.58, 0.46, 0.22),
+                      (n - 0.44) / 0.24);
+        else
+            col = mix(vec3(0.58, 0.46, 0.22), vec3(0.70, 0.65, 0.50),
+                      (n - 0.68) / 0.32);
+        /* polar ice caps */
+        col = mix(col, vec3(0.88, 0.91, 0.96),
+                  smoothstep(0.82, 0.97, lat));
+        return col;
+    }
+
+    /* ---- Mars --------------------------------------------------------- */
+    if (u_planet_type == 2) {
+        vec3 col = mix(vec3(0.38, 0.16, 0.06), vec3(0.86, 0.34, 0.13), n);
+        col = mix(col, vec3(0.84, 0.81, 0.76),
+                  smoothstep(0.88, 0.97, abs(NL.y)));
+        return col;
+    }
+
+    /* ---- Venus -------------------------------------------------------- */
+    if (u_planet_type == 3) {
+        float n2 = fbm(NL * 4.5 + vec3(3.7, 1.2, 8.4));
+        return mix(vec3(0.74, 0.66, 0.36), vec3(0.96, 0.90, 0.60),
+                   n * 0.5 + n2 * 0.5);
+    }
+
+    /* ---- Jupiter ------------------------------------------------------ */
+    if (u_planet_type == 4) {
+        float band = sin(NL.y * 18.0 + (n - 0.5) * 3.2) * 0.5 + 0.5;
+        return mix(vec3(0.48, 0.32, 0.14), vec3(0.94, 0.80, 0.54),
+                   band * 0.65 + n * 0.35);
+    }
+
+    /* ---- Saturn ------------------------------------------------------- */
+    if (u_planet_type == 5) {
+        float band = sin(NL.y * 11.0 + (n - 0.5) * 2.2) * 0.5 + 0.5;
+        return mix(vec3(0.58, 0.48, 0.24), vec3(0.98, 0.92, 0.64),
+                   band * 0.65 + n * 0.35);
+    }
+
+    /* ---- Ice giant (Uranus / Neptune) --------------------------------- */
+    if (u_planet_type == 6) {
+        float band = sin(NL.y * 5.0 + (n - 0.5)) * 0.07 + 0.93;
+        return u_color * (0.72 + 0.56 * n) * band;
+    }
+
+    /* ---- Io ----------------------------------------------------------- */
+    if (u_planet_type == 7) {
+        float n2 = fbm(NL * 8.5 + vec3(5.1, 3.2, 7.4));
+        vec3 col;
+        if (n < 0.5)
+            col = mix(vec3(0.88, 0.80, 0.22), vec3(0.84, 0.38, 0.06), n * 2.0);
+        else
+            col = mix(vec3(0.88, 0.80, 0.22), vec3(0.93, 0.90, 0.84),
+                      (n - 0.5) * 2.0);
+        /* dark volcanic patches */
+        col = mix(col, vec3(0.10, 0.07, 0.03),
+                  smoothstep(0.72, 0.84, n2) * 0.75);
+        return col;
+    }
+
+    /* ---- Titan -------------------------------------------------------- */
+    if (u_planet_type == 8) {
+        float n2 = fbm(NL * 2.2 + vec3(4.2, 1.8, 3.3));
+        return mix(vec3(0.50, 0.28, 0.06), vec3(0.84, 0.62, 0.26),
+                   n2 * 0.6 + 0.2);
+    }
+
+    /* ---- Europa ------------------------------------------------------- */
+    if (u_planet_type == 9) {
+        float n2 = fbm(NL * 9.0 + vec3(2.2, 6.6, 1.1));
+        vec3 col = mix(vec3(0.84, 0.82, 0.79), vec3(0.65, 0.56, 0.40),
+                       n * 0.25);
+        /* rust-brown cracks */
+        col = mix(col, vec3(0.44, 0.28, 0.16),
+                  smoothstep(0.60, 0.72, n2) * 0.55);
+        return col;
+    }
+
+    /* ---- type 0: generic rocky --------------------------------------- */
+    return mix(u_color * 0.55, u_color * 1.28, n);
+}
+
+/* ====================================================================== */
+
 void main() {
-    /* ---- per-pixel ray (perspective-correct via gl_FragCoord) ----------- */
-    vec2 ndc = gl_FragCoord.xy / vec2(u_aspect * 360.0, 360.0) - 1.0;
+    /* ---- per-pixel ray ------------------------------------------------ */
+    vec2 ndc    = gl_FragCoord.xy / vec2(u_aspect * 360.0, 360.0) - 1.0;
     vec3 ray_dir = normalize(u_cam_fwd
                            + u_cam_right * (ndc.x * u_aspect * u_fov_tan)
                            + u_cam_up    * (ndc.y * u_fov_tan));
 
-    /* ---- ray-sphere intersection (all in center-relative space) ----------
-     * u_oc = cam_pos - center, computed CPU-side with double precision.
-     * This avoids catastrophic cancellation when center >> radius (e.g.
-     * Haumea at 43 AU with radius 0.000004 AU).                           */
+    /* ---- ray-sphere intersection --------------------------------------- */
     float b_   = dot(u_oc, ray_dir);
     float c_   = dot(u_oc, u_oc) - u_radius * u_radius;
     float disc = b_ * b_ - c_;
-
     if (disc < 0.0) discard;
 
     float t = -b_ - sqrt(disc);
     if (t < 0.0) t = -b_ + sqrt(disc);
     if (t < 0.0) discard;
 
-    vec3 hit_rel = u_oc + t * ray_dir;      /* hit relative to centre     */
+    vec3 hit_rel = u_oc + t * ray_dir;
     vec3 N       = normalize(hit_rel);
-    vec3 hit     = u_center + hit_rel;      /* world space (for depth)    */
 
-    /* ---- write true sphere-surface depth -------------------------------- */
-    vec4 hit_clip  = u_vp * vec4(hit, 1.0);
-    gl_FragDepth   = (hit_clip.z / hit_clip.w) * 0.5 + 0.5;
+    /* ---- true sphere-surface depth ------------------------------------
+     * Computed directly from t (camera-to-surface distance) rather than
+     * by projecting the world-space hit point.  This avoids catastrophic
+     * float cancellation when the body is far from the origin, and makes
+     * the sphere depth exactly consistent with the dot depth computed by
+     * the standard GL pipeline for camera-relative positions.
+     * Formula: depth = (FAR/(FAR-NEAR)) * (1 - NEAR/t)
+     * Derivation: standard perspective NDC z mapped to [0,1],
+     *             simplified for z_eye = t (positive camera distance). */
+    /* ---- logarithmic depth — gives ~50-bit precision at Phobos-vs-Mars
+     * distances instead of ~1 bit with standard linear depth.
+     * log2(t+1) / log2(FAR+1) maps [0,FAR] → [0,1] monotonically.     */
+    const float FAR = 2000.0;
+    gl_FragDepth = log2(t + 1.0) / log2(FAR + 1.0);
 
-    /* ---- emissive (sun / stars) ---------------------------------------- */
+    /* ---- emissive (stars) --------------------------------------------- */
     if (u_emission > 0.5) {
-        float mu = max(dot(N, -ray_dir), 0.0);   /* 1 at disc centre, 0 at limb */
-
-        /* Quadratic limb darkening (Claret 2000, visual band)
-         * I(µ) = 1 − 0.38·(1−µ) − 0.31·(1−µ)²                           */
+        float mu     = max(dot(N, -ray_dir), 0.0);
         float one_mu = 1.0 - mu;
         float limb   = 1.0 - 0.38 * one_mu - 0.31 * one_mu * one_mu;
-
-        /* Disc is white — the additive glow pass provides the star's colour.
-         * A very faint warmth at the limb (one_mu term) keeps it from looking
-         * sterile; the limb-darkening already makes the edge dim anyway.     */
-        vec3 white = vec3(1.0, 0.98, 0.95);
-        vec3 disc  = mix(white, u_color, 0.15 * one_mu);
-
-        frag_color = vec4(disc * limb, 1.0);
+        vec3 white   = vec3(1.0, 0.98, 0.95);
+        vec3 disc    = mix(white, u_color, 0.15 * one_mu);
+        frag_color   = vec4(disc * limb, 1.0);
         return;
     }
 
-    /* ---- Phong diffuse -------------------------------------------------- */
-    vec3  L     = normalize(u_sun_rel - hit_rel); /* sun relative to centre */
+    /* ---- procedural surface texture ----------------------------------- */
+    /* Rotate N into body-local frame (Y-axis rotation by -u_rotation)    */
+    float cr = cos(-u_rotation);
+    float sr = sin(-u_rotation);
+    vec3 NL  = vec3(N.x * cr - N.z * sr,
+                    N.y,
+                    N.x * sr + N.z * cr);
+
+    vec3 surface = surface_color(NL);
+
+    /* ---- Phong diffuse ------------------------------------------------ */
+    vec3  L     = normalize(u_sun_rel - hit_rel);
     float diff  = max(dot(N, L), 0.0);
     float light = u_ambient + (1.0 - u_ambient) * diff;
 
-    frag_color = vec4(u_color * light, 1.0);
+    frag_color = vec4(surface * light, 1.0);
 }

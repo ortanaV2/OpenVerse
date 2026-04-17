@@ -102,3 +102,9 @@ Add an entry to `solar_system_init()` in `src/body.c`. The physics, trails, labe
 | Time scrubbing | Record state snapshots in `physics.c`, add a rewind buffer |
 | Export trajectory | `trails_sample()` already captures positions; write CSV from there |
 | Relativistic effects | Swap integrator in `physics.c` — everything else stays the same |
+
+### Big Features for the Future
+- Replace the skybox with authentic stars and planets
+- Add asteroid belts
+- Implement collision physics (including supernovae, etc.)
+- Refine the GUI / User Interface

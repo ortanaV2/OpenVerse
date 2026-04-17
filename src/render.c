@@ -41,6 +41,47 @@ static GLint  s_sp_color       = -1;
 static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
 static GLint  s_sp_sun_world   = -1;
+static GLint  s_sp_rotation    = -1;
+static GLint  s_sp_ptype       = -1;
+
+/* Planet-type mapping by body index (matches solar_system_init order).
+ * 0=rocky  1=Earth  2=Mars  3=Venus  4=Jupiter  5=Saturn
+ * 6=ice-giant  7=Io  8=Titan  9=Europa                      */
+static const int s_planet_types[] = {
+    0,          /* 0  Sun   (star — emission path, type unused) */
+    0,          /* 1  Mercury  */
+    3,          /* 2  Venus    */
+    1,          /* 3  Earth    */
+    2,          /* 4  Mars     */
+    4,          /* 5  Jupiter  */
+    5,          /* 6  Saturn   */
+    6,          /* 7  Uranus   */
+    6,          /* 8  Neptune  */
+    0,          /* 9  Ceres    */
+    0,          /* 10 Pluto    */
+    0,          /* 11 Eris     */
+    0,          /* 12 Makemake */
+    0,          /* 13 Haumea   */
+    0,          /* 14 Moon     */
+    0,          /* 15 Phobos   */
+    0,          /* 16 Deimos   */
+    7,          /* 17 Io       */
+    9,          /* 18 Europa   */
+    0,          /* 19 Ganymede */
+    0,          /* 20 Callisto */
+    0,          /* 21 Mimas    */
+    0,          /* 22 Enceladus*/
+    0,          /* 23 Tethys   */
+    0,          /* 24 Dione    */
+    0,          /* 25 Rhea     */
+    8,          /* 26 Titan    */
+    0,          /* 27 Miranda  */
+    0,          /* 28 Ariel    */
+    0,          /* 29 Umbriel  */
+    0,          /* 30 Titania  */
+    0,          /* 31 Oberon   */
+    0,          /* 32 Triton   */
+};
 
 /* ------------------------------------------------------------------ dots */
 static GLuint s_dot_shader  = 0;
@@ -98,6 +139,8 @@ void render_init(void) {
     s_sp_cam_fwd   = glGetUniformLocation(s_sphere_shader, "u_cam_fwd");
     s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
     s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
+    s_sp_rotation  = glGetUniformLocation(s_sphere_shader, "u_rotation");
+    s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
 
     /* Frame-constant camera parameters */
     glUseProgram(s_sphere_shader);
@@ -230,6 +273,11 @@ void render_frame(const float view[16], const float proj[16],
         float px = (WIN_H / 2.0f) * dr / (dcam * half_fov_tan() + 1e-9f);
         info[i].show   = (px < 2.5f) ? 1 : 0;
 
+        /* Sub-pixel bodies are shown as dots only — skip billboard render.
+         * Rendering a sub-pixel sphere quad produces 1-2 unstable fragments
+         * at semi-random pixels that flicker as the camera moves/rotates. */
+        if (info[i].show) continue;
+
         /* Compute oc = cam - center and sun_rel = sun - center in double
          * to avoid float cancellation for small/distant bodies.           */
         double cam_mx = (double)g_cam.pos[0] * AU;
@@ -249,6 +297,14 @@ void render_frame(const float view[16], const float proj[16],
         glUniform3f(s_sp_color,    b->col[0], b->col[1], b->col[2]);
         glUniform1f(s_sp_emission, b->is_star ? 1.0f : 0.0f);
         glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
+
+        /* Procedural surface texture uniforms */
+        glUniform1f(s_sp_rotation, (float)b->rotation_angle);
+        {
+            int ptype = (i < (int)(sizeof(s_planet_types)/sizeof(s_planet_types[0])))
+                        ? s_planet_types[i] : 0;
+            glUniform1i(s_sp_ptype, ptype);
+        }
 
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
@@ -311,25 +367,35 @@ void render_frame(const float view[16], const float proj[16],
         }
     }
 
-    /* Upload and draw surviving dots */
+    /* Upload and draw surviving dots.
+     * Positions are camera-relative (world_AU - cam_AU), matching the
+     * convention used for trails and labels.  The dot shader is given
+     * vp_camrel (proj × view_rot, no translation) so the GL depth values
+     * are produced by the same formula as the sphere shader's gl_FragDepth,
+     * avoiding any world-space float cancellation at large distances.       */
     float dot_data[MAX_BODIES * 6];
     int   dot_count = 0;
-    for (int oi = 0; oi < g_nbodies; oi++) {
-        int i = dot_order[oi];
-        if (!dot_vis[i]) continue;
-        Body *b = &g_bodies[i];
-        dot_data[dot_count*6+0] = (float)(b->pos[0] * RS);
-        dot_data[dot_count*6+1] = (float)(b->pos[1] * RS);
-        dot_data[dot_count*6+2] = (float)(b->pos[2] * RS);
-        dot_data[dot_count*6+3] = b->col[0];
-        dot_data[dot_count*6+4] = b->col[1];
-        dot_data[dot_count*6+5] = b->col[2];
-        dot_count++;
+    {
+        double cx = g_cam.pos[0];
+        double cy = g_cam.pos[1];
+        double cz = g_cam.pos[2];
+        for (int oi = 0; oi < g_nbodies; oi++) {
+            int i = dot_order[oi];
+            if (!dot_vis[i]) continue;
+            Body *b = &g_bodies[i];
+            dot_data[dot_count*6+0] = (float)(b->pos[0] * RS - cx);
+            dot_data[dot_count*6+1] = (float)(b->pos[1] * RS - cy);
+            dot_data[dot_count*6+2] = (float)(b->pos[2] * RS - cz);
+            dot_data[dot_count*6+3] = b->col[0];
+            dot_data[dot_count*6+4] = b->col[1];
+            dot_data[dot_count*6+5] = b->col[2];
+            dot_count++;
+        }
     }
 
     if (dot_count > 0) {
         glUseProgram(s_dot_shader);
-        glUniformMatrix4fv(s_dot_vp, 1, GL_FALSE, vp);
+        glUniformMatrix4fv(s_dot_vp, 1, GL_FALSE, vp_camrel);
         glBindVertexArray(s_dot_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_dot_vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
