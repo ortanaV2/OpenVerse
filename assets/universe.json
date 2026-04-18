@@ -43,29 +43,6 @@
           }
         },
 
-                {
-          // Rogue body on inbound hyperbolic-like trajectory.
-          // Perihelion 0.225 AU (inside Mercury), aphelion 8.8 AU (Jupiter–Saturn).
-          // At J2000 + 2-yr warmup: M ≈ 240° — past aphelion, falling toward Sun.
-          // Period ~9.5 years, inclination 35° for visual drama.
-          "name": "Death",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 9.301e29,
-          "radius_km": 560439.7,
-          "color": [0.85, 0.42, 0.28],
-          "obliquity_deg": 2.054,
-          "rotation_period_days": 28.646,
-          "keplerian": {
-            "a": 4.5,
-            "e": 0.95,
-            "i": 35.0,
-            "Omega": 45.0,
-            "omega_tilde": 60.0,
-            "L": 225.0
-          }
-        },
-
         {
           "name": "Venus",
           "type": "planet",

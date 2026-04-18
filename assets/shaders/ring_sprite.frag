@@ -57,5 +57,13 @@ void main() {
         alpha = 0.48 * t;
     }
 
+    /* Logarithmic depth — must match phong.frag / solid.frag.
+     * Without this the depth comparison between ring and planet uses
+     * mismatched scales (linear vs. log), causing the ring to render
+     * in front of the planet when viewed off-centre.
+     * gl_FragCoord.w = 1/w_clip = 1/eye_distance for perspective.      */
+    const float FAR = 2000.0;
+    gl_FragDepth = log2(1.0 / gl_FragCoord.w + 1.0) / log2(FAR + 1.0);
+
     frag_color = vec4(col, alpha);
 }

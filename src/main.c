@@ -83,7 +83,7 @@ static int app_init(void) {
         return 0;
     }
 
-    SDL_GL_SetSwapInterval(1);   /* vsync */
+    SDL_GL_SetSwapInterval(0);   /* vsync deactivated for debugging purpose - activate for production*/
 
     /* GLEW */
     glewExperimental = GL_TRUE;

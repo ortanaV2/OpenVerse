@@ -293,11 +293,11 @@ void universe_load(const char *path)
                 bo->atm_intensity = 0.0f;
                 bo->atm_scale     = 1.0f;
 
-                /* Trail interval: T/200, floored at 60 s */
+                /* Trail interval: T/400, floored at 60 s */
                 {
                     double a_m = a_km * 1000.0;
                     double T   = 2.0 * PI * sqrt(a_m * a_m * a_m / gm_parent);
-                    bo->trail_interval = T / 200.0;
+                    bo->trail_interval = T / 400.0;
                     if (bo->trail_interval < 60.0) bo->trail_interval = 60.0;
                 }
 
@@ -343,7 +343,7 @@ void universe_load(const char *path)
                     if (kep) {
                         double a      = json_num(json_get(kep, "a"), 1.0);
                         double T_days = 2.0 * PI * sqrt(a * a * a / GM_SUN);
-                        g_bodies[idx].trail_interval = (T_days / 200.0) * DAY;
+                        g_bodies[idx].trail_interval = (T_days / 400.0) * DAY;
                     }
                 }
             }
