@@ -43,3 +43,10 @@
 
 /* 1 AU → 1.0 GL unit */
 #define RS  (1.0 / AU)
+
+/* ------------------------------------------------------------------ system LOD (AU)
+ * Distances at which rendering elements fade when flying away from the system. */
+#define SYS_TRAIL_FADE_START  240.0f   /* trails at full opacity below this */
+#define SYS_TRAIL_FADE_END   1200.0f   /* trails fully invisible above this */
+#define SYS_DOT_FADE_START    240.0f   /* non-star dots begin fading        */
+#define SYS_DOT_FADE_END     1200.0f   /* non-star dots fully gone          */

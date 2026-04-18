@@ -167,14 +167,17 @@ void ui_render(void) {
     if (spd > CAM_MAX) spd = CAM_MAX;
     float t = logf(spd / CAM_MIN) / logf(CAM_MAX / CAM_MIN);
 
-    /* Format movement speed string */
+    /* Format movement speed string — show WARP indicator when T is held */
     char mv_str[64];
-    if (spd < 0.001f)
+    if (g_warp) {
+        snprintf(mv_str, sizeof(mv_str), "WARP  1.00 ly/s");
+    } else if (spd < 0.001f) {
         snprintf(mv_str, sizeof(mv_str), "%.5f AU/s", (double)spd);
-    else if (spd < 1.0f)
+    } else if (spd < 1.0f) {
         snprintf(mv_str, sizeof(mv_str), "%.3f AU/s", (double)spd);
-    else
+    } else {
         snprintf(mv_str, sizeof(mv_str), "%.2f AU/s", (double)spd);
+    }
 
     /* Format sim speed string */
     char ss_str[64];

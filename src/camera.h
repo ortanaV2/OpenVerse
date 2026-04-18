@@ -12,6 +12,7 @@ typedef struct {
 } Camera;
 
 extern Camera g_cam;
+extern int    g_warp;   /* 1 = warp mode active (T key), 0 = normal */
 
 /* Reset to default top-down solar-system view */
 void cam_reset(void);

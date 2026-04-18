@@ -52,6 +52,12 @@ static const double SPEED_TABLE[] = {
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */
 
+/* Warp mode (T key) — 1 light-year per second interstellar travel speed.
+ * 1 ly ≈ 63241 AU.  Normal max is 200 AU/s; warp is ~316× faster. */
+#define WARP_SPEED_AU  63241.0f   /* AU/s — 1 ly/s */
+int s_warp = 0;            /* 0 = normal, 1 = warp engaged */
+int g_warp = 0;            /* public mirror of s_warp for UI/other modules */
+
 
 /* ------------------------------------------------------------------ init / quit */
 static int app_init(void) {
@@ -135,6 +141,12 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_q: s_key_q = 1; break;
         case SDLK_e: s_key_e = 1; break;
         case SDLK_r: cam_reset(); break;
+        case SDLK_t:
+            s_warp = !s_warp;
+            g_warp = s_warp;
+            fprintf(stdout, "[Cam] warp %s (%.0f AU/s)\n",
+                    s_warp ? "ON" : "OFF", s_warp ? (double)WARP_SPEED_AU : (double)g_cam.speed);
+            break;
         case SDLK_SPACE: g_paused = !g_paused; break;
         case SDLK_ESCAPE:
             if (s_freelook) {
@@ -210,8 +222,9 @@ static void camera_move(float dt) {
     if (rlen > 1e-6f) { rx /= rlen; rz /= rlen; }
 
     /* Compute delta in double so that pos (double) += tiny_delta never loses
-     * the increment due to float32 ULP at large orbital distances.          */
-    double dspd = (double)g_cam.speed * (double)dt;
+     * the increment due to float32 ULP at large orbital distances.
+     * In warp mode the speed is 1 ly/s = 63241 AU/s regardless of g_cam.speed. */
+    double dspd = (double)(s_warp ? WARP_SPEED_AU : g_cam.speed) * (double)dt;
 
     if (s_key_w) { g_cam.pos[0] += (double)fdx*dspd; g_cam.pos[1] += (double)fdy*dspd; g_cam.pos[2] += (double)fdz*dspd; }
     if (s_key_s) { g_cam.pos[0] -= (double)fdx*dspd; g_cam.pos[1] -= (double)fdy*dspd; g_cam.pos[2] -= (double)fdz*dspd; }

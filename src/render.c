@@ -472,28 +472,62 @@ void render_frame(const float view[16], const float proj[16],
         }
     }
 
+    /* Distance from camera to star — used for LOD dot fade.
+     * Non-star dots fade from full brightness at SYS_DOT_FADE_START to black
+     * (invisible against the near-black background) at SYS_DOT_FADE_END.
+     * The star dot is always kept at full brightness.                        */
+    float dot_fade = 1.0f;
+    {
+        float sdx = (float)(g_cam.pos[0]) - sun_wx;
+        float sdy = (float)(g_cam.pos[1]) - sun_wy;
+        float sdz = (float)(g_cam.pos[2]) - sun_wz;
+        float dist_sun = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
+        dot_fade = 1.0f - (dist_sun - SYS_DOT_FADE_START)
+                        / (SYS_DOT_FADE_END - SYS_DOT_FADE_START);
+        if (dot_fade > 1.0f) dot_fade = 1.0f;
+        if (dot_fade < 0.0f) dot_fade = 0.0f;
+    }
+
     /* Upload and draw surviving dots.
      * Positions are camera-relative (world_AU - cam_AU), matching the
      * convention used for trails and labels.  The dot shader is given
      * vp_camrel (proj × view_rot, no translation) so the GL depth values
      * are produced by the same formula as the sphere shader's gl_FragDepth,
-     * avoiding any world-space float cancellation at large distances.       */
+     * avoiding any world-space float cancellation at large distances.
+     * Non-star dots have their RGB multiplied by dot_fade (fade to black).   */
     float dot_data[MAX_BODIES * 6];
     int   dot_count = 0;
     {
         double cx = g_cam.pos[0];
         double cy = g_cam.pos[1];
         double cz = g_cam.pos[2];
+        /* Stars are clamped to within the view frustum so they remain visible
+         * even at warp distances (far beyond the 2000 AU far plane).          */
+        const float DOT_CLAMP_DIST = 1500.0f;
+
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
             if (!dot_vis[i]) continue;
             Body *b = &g_bodies[i];
-            dot_data[dot_count*6+0] = (float)(b->pos[0] * RS - cx);
-            dot_data[dot_count*6+1] = (float)(b->pos[1] * RS - cy);
-            dot_data[dot_count*6+2] = (float)(b->pos[2] * RS - cz);
-            dot_data[dot_count*6+3] = b->col[0];
-            dot_data[dot_count*6+4] = b->col[1];
-            dot_data[dot_count*6+5] = b->col[2];
+            /* Star is always full brightness; other bodies fade to black */
+            float f = b->is_star ? 1.0f : dot_fade;
+            if (f <= 0.0f) continue;   /* skip invisible non-star dots */
+            float bx = (float)(b->pos[0] * RS - cx);
+            float by = (float)(b->pos[1] * RS - cy);
+            float bz = (float)(b->pos[2] * RS - cz);
+            if (b->is_star) {
+                float d = sqrtf(bx*bx + by*by + bz*bz);
+                if (d > DOT_CLAMP_DIST && d > 1e-6f) {
+                    float s = DOT_CLAMP_DIST / d;
+                    bx *= s; by *= s; bz *= s;
+                }
+            }
+            dot_data[dot_count*6+0] = bx;
+            dot_data[dot_count*6+1] = by;
+            dot_data[dot_count*6+2] = bz;
+            dot_data[dot_count*6+3] = b->col[0] * f;
+            dot_data[dot_count*6+4] = b->col[1] * f;
+            dot_data[dot_count*6+5] = b->col[2] * f;
             dot_count++;
         }
     }
@@ -526,8 +560,15 @@ void render_frame(const float view[16], const float proj[16],
      * lens effect and should always be visible regardless of scene depth.
      * Only drawn when the star is roughly in front of the camera.           */
     if (s_glare_shader) {
+        /* Star glare uses vp_camrel (rotation-only) so the centre is passed
+         * as a camera-relative offset.  This lets us clamp distant stars to
+         * within the near/far range (the star at 63 000 AU in warp mode would
+         * otherwise be clipped by the far plane).  The radius is scaled by the
+         * same factor to maintain the star's angular size on screen.          */
+        const float GLARE_MAX_DIST = 1500.0f;
+
         glUseProgram(s_glare_shader);
-        glUniformMatrix4fv(s_gl_vp, 1, GL_FALSE, vp);
+        glUniformMatrix4fv(s_gl_vp, 1, GL_FALSE, vp_camrel);
         glUniform3f(s_gl_right, cam_right[0], cam_right[1], cam_right[2]);
         glUniform3f(s_gl_up,    cam_up[0],    cam_up[1],    cam_up[2]);
 
@@ -541,14 +582,26 @@ void render_frame(const float view[16], const float proj[16],
         for (int i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].is_star) continue;
 
-            /* Skip if star is behind the camera */
-            float dx = info[i].pos[0] - g_cam.pos[0];
-            float dy = info[i].pos[1] - g_cam.pos[1];
-            float dz = info[i].pos[2] - g_cam.pos[2];
-            if (dx*cam_fwd[0] + dy*cam_fwd[1] + dz*cam_fwd[2] < 0.0f) continue;
+            /* Camera-relative star position (double precision → float) */
+            float rx = (float)(g_bodies[i].pos[0] * RS - g_cam.pos[0]);
+            float ry = (float)(g_bodies[i].pos[1] * RS - g_cam.pos[1]);
+            float rz = (float)(g_bodies[i].pos[2] * RS - g_cam.pos[2]);
 
-            glUniform3f(s_gl_center, info[i].pos[0], info[i].pos[1], info[i].pos[2]);
-            glUniform1f(s_gl_radius, info[i].dr);
+            /* Skip if star is behind the camera */
+            if (rx*cam_fwd[0] + ry*cam_fwd[1] + rz*cam_fwd[2] < 0.0f) continue;
+
+            /* Clamp distance to keep the billboard within the view frustum.
+             * Radius is scaled proportionally to preserve angular size.       */
+            float dist   = sqrtf(rx*rx + ry*ry + rz*rz);
+            float radius = info[i].dr;
+            if (dist > GLARE_MAX_DIST && dist > 1e-6f) {
+                float s = GLARE_MAX_DIST / dist;
+                rx *= s; ry *= s; rz *= s;
+                radius *= s;
+            }
+
+            glUniform3f(s_gl_center, rx, ry, rz);
+            glUniform1f(s_gl_radius, radius);
             glUniform3f(s_gl_color,
                         g_bodies[i].col[0], g_bodies[i].col[1], g_bodies[i].col[2]);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
