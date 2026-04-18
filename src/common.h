@@ -38,7 +38,7 @@
 
 /* ------------------------------------------------------------------ sim */
 #define MAX_BODIES         128
-#define TRAIL_LEN         2048
+#define TRAIL_LEN  4096   /* trail circular buffer size (per body, all bodies) */
 #define NUM_STARS          4000
 
 /* 1 AU → 1.0 GL unit */

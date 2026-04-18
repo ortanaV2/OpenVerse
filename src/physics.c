@@ -215,19 +215,22 @@ static void sample_body(Body *b) {
     if (b->trail_count < TRAIL_LEN) b->trail_count++;
 }
 
-void trails_sample(void) {
-    int i;
-    for (i = 0; i < g_nbodies; i++)
-        sample_body(&g_bodies[i]);
-}
-
+/*
+ * trails_tick — time-based trail sampling.
+ *
+ * Each body accumulates sim-time; once trail_interval is exceeded a sample
+ * is recorded.  The while-loop handles multiple samples per tick (fast
+ * moons or high sim speeds).  trail_interval ≈ T/200 gives ~200 evenly
+ * spaced samples per orbit regardless of sim speed — the trail fills the
+ * buffer faster at high speeds, naturally showing more orbital history.
+ */
 void trails_tick(double dt) {
     int i;
     for (i = 0; i < g_nbodies; i++) {
         Body *b = &g_bodies[i];
-        if (b->trail_interval <= 0.0) continue;
+        if (!b->trail || b->trail_interval <= 0.0) continue;
         b->trail_accum += dt;
-        if (b->trail_accum >= b->trail_interval) {
+        while (b->trail_accum >= b->trail_interval) {
             b->trail_accum -= b->trail_interval;
             sample_body(b);
         }

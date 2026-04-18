@@ -1,140 +1,49 @@
 /*
- * rings.c — Keplerian ring particle system (Saturn, Uranus, Neptune)
+ * rings.c — Keplerian ring particle system, data-driven from universe.json
  *
  * Physics
  * ───────
  * Each particle follows a Keplerian elliptical orbit around its parent body.
  * The CPU advances the mean anomaly  M += n·dt  each physics sub-step.
- * The GPU solves the first-order Kepler equation every frame:
- *
- *   ν ≈ M + 2e·sin M          (true anomaly,   O(e²) error)
- *   r ≈ a·(1 − e·cos M)       (orbital radius, O(e²) error)
+ * The GPU solves the first-order Kepler equation every frame.
  *
  * Ring-plane orientation
  * ──────────────────────
  * Each planet's ring plane is perpendicular to its rotation pole.
  * We build an orthonormal basis {b1, b2, pole} by rotating the ecliptic
- * frame about the X-axis by the planet's obliquity:
- *
- *   b1   = (1, 0, 0)
- *   b2   = (0,  sin(obl), −cos(obl))
- *   pole = (0,  cos(obl),  sin(obl))   [ = b1 × b2 ]
- *
- * This is the same convention as the existing Saturn shader.
+ * frame about the X-axis by the planet's obliquity.
  *
  * LOD
  * ───
- *   dist > SPRITE_DIST  →  flat sprite quad (ring_sprite / ring_sprite_generic)
+ *   dist > SPRITE_DIST  →  flat sprite quad
  *   dist > LOD_DIST     →  reduced particle count
  *   dist ≤ LOD_DIST     →  full particle count
- *
- * Ring data (km from planet centre)
- * ──────────────────────────────────
- * Saturn:  C 74658–92000, B 92000–117580, Cassini gap, A 122170–136775
- * Uranus:  inner rings 41800–48000, ε ring 50500–51200 (nearly perpendicular)
- * Neptune: Galle 41900–42900, mid 53000–57500, Adams 62500–63200
  */
 #include "rings.h"
 #include "body.h"
 #include "physics.h"
 #include "gl_utils.h"
+#include "json.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define SPRITE_DIST   0.2f
 #define LOD_DIST      0.05f
+#define MAX_ZONES     16
 
-/* ── Zone table type ────────────────────────────────────────────────── */
+/* ── Zone ───────────────────────────────────────────────────────────── */
 typedef struct {
-    float r_min;    /* km from planet centre */
-    float r_max;
-    float density;  /* fraction of particles in this zone */
+    float r_min, r_max;
+    float density;
     float r, g, b;
 } Zone;
 
-/* ── Saturn zones ───────────────────────────────────────────────────── */
-static const Zone ZONES_SATURN[] = {
-    {  74658,  92000, 0.10f, 0.60f, 0.56f, 0.50f },   /* C ring      */
-    {  92000, 117580, 0.60f, 0.88f, 0.82f, 0.68f },   /* B ring      */
-    { 117580, 122170, 0.02f, 0.40f, 0.38f, 0.35f },   /* Cassini gap */
-    { 122170, 136775, 0.28f, 0.78f, 0.73f, 0.60f },   /* A ring      */
-};
-
-/* ── Uranus zones ───────────────────────────────────────────────────── */
-/* 9 classical narrow rings (6,5,4,α,β,η,γ,δ,ε); ε is the brightest.
- * Simplified into 3 zones for visual density. Very dark (albedo ~0.03). */
-static const Zone ZONES_URANUS[] = {
-    { 41800, 45000, 0.35f, 0.26f, 0.26f, 0.28f },   /* inner rings 6,5,4,α,β */
-    { 45000, 48000, 0.25f, 0.22f, 0.22f, 0.24f },   /* η,γ,δ rings            */
-    { 50500, 51200, 0.40f, 0.32f, 0.32f, 0.35f },   /* ε ring (brightest)     */
-};
-
-/* ── Neptune zones ──────────────────────────────────────────────────── */
-/* Galle, Le Verrier, Lassell, Arago, Adams rings. Very faint.          */
-static const Zone ZONES_NEPTUNE[] = {
-    { 41900, 42900, 0.20f, 0.28f, 0.24f, 0.22f },   /* Galle ring           */
-    { 53000, 57500, 0.40f, 0.30f, 0.26f, 0.24f },   /* LeVerrier+Lassell+Arago */
-    { 62500, 63200, 0.40f, 0.32f, 0.28f, 0.26f },   /* Adams ring           */
-};
-
-/* ── Per-ring static configuration ─────────────────────────────────── */
-typedef struct {
-    const char  *body_name;
-    const Zone  *zones;
-    int          n_zones;
-    int          n_full, n_lod;
-    uint32_t     seed_full, seed_lod;
-    float        e_max;         /* max eccentricity for baking            */
-    float        h_scale;       /* vertical scatter half-extent (AU)      */
-    float        sprite_r_au;   /* sprite quad half-extent                */
-    /* Generic sprite (0 = Saturn-specific shader) */
-    int          use_generic_sprite;
-    float        sp_r_inner_km, sp_r_outer_km;
-    float        sp_color[3];
-    float        sp_alpha_max;
-} RingConfig;
-
-static const RingConfig RING_CONFIGS[3] = {
-    /* Saturn */
-    {
-        "Saturn",
-        ZONES_SATURN, 4,
-        25000, 2000,
-        1234u, 5678u,
-        0.008f, 5e-7f,
-        136775.0f / 149600000.0f * 1.05f,
-        0,
-        0.0f, 0.0f, {0.0f,0.0f,0.0f}, 0.0f
-    },
-    /* Uranus — obliquity 97.77°, rings nearly perpendicular to ecliptic */
-    {
-        "Uranus",
-        ZONES_URANUS, 3,
-        8000, 1000,
-        0xABCDu, 0xEF01u,
-        0.003f, 2e-7f,
-        51200.0f / 149600000.0f * 1.05f,
-        1,
-        41800.0f, 51200.0f, {0.28f, 0.28f, 0.30f}, 0.35f
-    },
-    /* Neptune — obliquity 28.32° */
-    {
-        "Neptune",
-        ZONES_NEPTUNE, 3,
-        6000, 800,
-        0x2345u, 0x6789u,
-        0.003f, 2e-7f,
-        63200.0f / 149600000.0f * 1.05f,
-        1,
-        41900.0f, 63200.0f, {0.30f, 0.26f, 0.24f}, 0.25f
-    },
-};
-#define N_DISCS 3
-
 /* ── Active disc instances ──────────────────────────────────────────── */
-static ParticleDisc s_discs[N_DISCS];
+static ParticleDisc *s_discs  = NULL;
+static int           s_n_discs = 0;
 
 /* ── XorShift32 PRNG ────────────────────────────────────────────────── */
 static uint32_t s_rng = 1;
@@ -152,19 +61,13 @@ static void build_basis(ParticleDisc *d, float obl_deg)
     float obl = obl_deg * (float)(PI / 180.0);
     d->b1[0] = 1.0f; d->b1[1] = 0.0f;       d->b1[2] = 0.0f;
     d->b2[0] = 0.0f; d->b2[1] = sinf(obl);  d->b2[2] = -cosf(obl);
-    /* pole = b1 × b2 = (0, cos(obl), sin(obl)) */
     d->pole[0] = 0.0f; d->pole[1] = cosf(obl); d->pole[2] = sinf(obl);
 }
 
-/* ── bake_particles — fill data[8×n] and n_arr[n] ───────────────────── */
-/*
- * data layout: [M, a_au, e, omega, height, cr, cg, cb]
- * gm: parent body GM in m³/s² (used for mean-motion n = √(GM/a³))
- */
+/* ── bake_particles ─────────────────────────────────────────────────── */
 static void bake_particles(float *data, float *n_arr, int n,
                             const Zone *zones, int n_zones,
-                            double gm,
-                            float e_max, float h_scale)
+                            double gm, float e_max, float h_scale)
 {
     int idx = 0;
     for (int z = 0; z < n_zones; z++) {
@@ -178,7 +81,6 @@ static void bake_particles(float *data, float *n_arr, int n,
         float r2_max = r_max_au * r_max_au;
 
         for (int k = 0; k < cnt && idx < n; k++, idx++) {
-            /* Area-uniform semi-major axis */
             float a_au = sqrtf(r2_min + s_randf() * (r2_max - r2_min));
             float M0   = s_randf() * 2.0f * (float)PI;
             float e    = s_randf() * e_max;
@@ -196,7 +98,6 @@ static void bake_particles(float *data, float *n_arr, int n,
             data[idx*8+6] = zones[z].g * j;
             data[idx*8+7] = zones[z].b * j;
 
-            /* Keplerian mean motion n = √(GM / a³) [rad/s] */
             double a_m = (double)a_au * 1.496e11;
             n_arr[idx] = (float)sqrt(gm / (a_m * a_m * a_m));
         }
@@ -220,9 +121,8 @@ static void setup_particle_attribs(void) {
 }
 
 /* ── init_disc_gl ───────────────────────────────────────────────────── */
-static void init_disc_gl(ParticleDisc *d, const RingConfig *cfg)
+static void init_disc_gl(ParticleDisc *d)
 {
-    /* Particle shader (ring.vert + color.frag) */
     d->shader = gl_shader_load("assets/shaders/ring.vert",
                                "assets/shaders/color.frag");
     if (!d->shader) return;
@@ -244,14 +144,10 @@ static void init_disc_gl(ParticleDisc *d, const RingConfig *cfg)
     setup_particle_attribs();
     glBindVertexArray(0);
 
-    /* Sprite shader */
-    if (cfg->use_generic_sprite) {
-        d->sprite_shader = gl_shader_load("assets/shaders/ring_sprite.vert",
-                                          "assets/shaders/ring_sprite_generic.frag");
-    } else {
-        d->sprite_shader = gl_shader_load("assets/shaders/ring_sprite.vert",
-                                          "assets/shaders/ring_sprite.frag");
-    }
+    const char *frag = d->use_generic_sprite
+                       ? "assets/shaders/ring_sprite_generic.frag"
+                       : "assets/shaders/ring_sprite.frag";
+    d->sprite_shader = gl_shader_load("assets/shaders/ring_sprite.vert", frag);
     if (!d->sprite_shader) return;
 
     d->sp_loc_vp     = glGetUniformLocation(d->sprite_shader, "u_vp");
@@ -259,18 +155,11 @@ static void init_disc_gl(ParticleDisc *d, const RingConfig *cfg)
     d->sp_loc_b1     = glGetUniformLocation(d->sprite_shader, "u_b1");
     d->sp_loc_b2     = glGetUniformLocation(d->sprite_shader, "u_b2");
 
-    if (cfg->use_generic_sprite) {
-        d->use_generic_sprite  = 1;
-        d->sp_loc_r_inner      = glGetUniformLocation(d->sprite_shader, "u_r_inner_km");
-        d->sp_loc_r_outer      = glGetUniformLocation(d->sprite_shader, "u_r_outer_km");
-        d->sp_loc_ring_color   = glGetUniformLocation(d->sprite_shader, "u_ring_color");
-        d->sp_loc_alpha_max    = glGetUniformLocation(d->sprite_shader, "u_alpha_max");
-        d->sp_r_inner_km       = cfg->sp_r_inner_km;
-        d->sp_r_outer_km       = cfg->sp_r_outer_km;
-        d->sp_color[0]         = cfg->sp_color[0];
-        d->sp_color[1]         = cfg->sp_color[1];
-        d->sp_color[2]         = cfg->sp_color[2];
-        d->sp_alpha_max        = cfg->sp_alpha_max;
+    if (d->use_generic_sprite) {
+        d->sp_loc_r_inner    = glGetUniformLocation(d->sprite_shader, "u_r_inner_km");
+        d->sp_loc_r_outer    = glGetUniformLocation(d->sprite_shader, "u_r_outer_km");
+        d->sp_loc_ring_color = glGetUniformLocation(d->sprite_shader, "u_ring_color");
+        d->sp_loc_alpha_max  = glGetUniformLocation(d->sprite_shader, "u_alpha_max");
     }
 
     d->sprite_vao = gl_vao_create();
@@ -316,7 +205,6 @@ static void render_disc(const ParticleDisc *d, const float vp[16])
     float dist = sqrtf(dx*dx + dy*dy + dz*dz);
 
     if (dist > SPRITE_DIST) {
-        /* ── Far LOD: flat sprite quad ─────────────────────────────── */
         if (!d->sprite_shader) return;
 
         float quad[18];
@@ -329,10 +217,10 @@ static void render_disc(const ParticleDisc *d, const float vp[16])
         glUniform3fv      (d->sp_loc_b2,    1, d->b2);
 
         if (d->use_generic_sprite) {
-            glUniform1f(d->sp_loc_r_inner,    d->sp_r_inner_km);
-            glUniform1f(d->sp_loc_r_outer,    d->sp_r_outer_km);
+            glUniform1f (d->sp_loc_r_inner,    d->sp_r_inner_km);
+            glUniform1f (d->sp_loc_r_outer,    d->sp_r_outer_km);
             glUniform3fv(d->sp_loc_ring_color, 1, d->sp_color);
-            glUniform1f(d->sp_loc_alpha_max,  d->sp_alpha_max);
+            glUniform1f (d->sp_loc_alpha_max,  d->sp_alpha_max);
         }
 
         glBindVertexArray(d->sprite_vao);
@@ -347,7 +235,6 @@ static void render_disc(const ParticleDisc *d, const float vp[16])
         glBindVertexArray(0);
 
     } else {
-        /* ── Near LOD: Keplerian particles ─────────────────────────── */
         if (!d->shader) return;
 
         int    n   = (dist > LOD_DIST) ? d->n_lod   : d->n_full;
@@ -375,63 +262,125 @@ static void render_disc(const ParticleDisc *d, const float vp[16])
 
 /* ── public ─────────────────────────────────────────────────────────── */
 
-void rings_init(void)
+void rings_init(const char *path)
 {
-    memset(s_discs, 0, sizeof(s_discs));
+    /* Parse rings section from universe.json */
+    JsonNode *root = json_parse_file(path);
+    if (!root) {
+        fprintf(stderr, "[Rings] cannot parse '%s'\n", path);
+        return;
+    }
 
-    for (int d = 0; d < N_DISCS; d++) {
-        const RingConfig *cfg = &RING_CONFIGS[d];
-        ParticleDisc     *disc = &s_discs[d];
+    JsonNode *rings_arr = json_get(root, "rings");
+    if (!rings_arr || rings_arr->type != JSON_ARRAY) {
+        fprintf(stderr, "[Rings] no 'rings' array in '%s' — skipping\n", path);
+        json_free(root);
+        return;
+    }
 
-        /* Find parent body by name */
-        disc->parent_idx = -1;
+    /* Count entries */
+    int count = 0;
+    { JsonNode *n = rings_arr->first_child; while (n) { count++; n = n->next; } }
+    if (count == 0) { json_free(root); return; }
+
+    s_discs   = (ParticleDisc*)calloc(count, sizeof(ParticleDisc));
+    s_n_discs = 0;
+    if (!s_discs) { json_free(root); return; }
+
+    JsonNode *rnode = rings_arr->first_child;
+    while (rnode) {
+        const char *body_name  = json_str(json_get(rnode, "body"), "");
+        const char *shader_type = json_str(json_get(rnode, "shader_type"), "generic");
+        int    n_full      = (int)json_num(json_get(rnode, "n_full"),       1000);
+        int    n_lod       = (int)json_num(json_get(rnode, "n_lod"),         200);
+        uint32_t seed_full = (uint32_t)json_num(json_get(rnode, "seed_full"), 1234);
+        uint32_t seed_lod  = (uint32_t)json_num(json_get(rnode, "seed_lod"),  5678);
+        float  e_max       = (float)json_num(json_get(rnode, "e_max"),       0.01);
+        float  h_scale     = (float)json_num(json_get(rnode, "h_scale"),     1e-6);
+        float  sprite_r    = (float)json_num(json_get(rnode, "sprite_r_au"), 0.001);
+
+        /* Find parent body */
+        int par_idx = -1;
         for (int i = 0; i < g_nbodies; i++) {
-            if (strcmp(g_bodies[i].name, cfg->body_name) == 0) {
-                disc->parent_idx = i;
-                break;
-            }
+            if (strcmp(g_bodies[i].name, body_name) == 0) { par_idx = i; break; }
         }
-        if (disc->parent_idx < 0) {
-            fprintf(stderr, "[Rings] body '%s' not found — ring skipped\n",
-                    cfg->body_name);
+        if (par_idx < 0) {
+            fprintf(stderr, "[Rings] body '%s' not found — ring skipped\n", body_name);
+            rnode = rnode->next;
             continue;
         }
 
-        disc->n_full = cfg->n_full;
-        disc->n_lod  = cfg->n_lod;
-        disc->sprite_r = cfg->sprite_r_au;
+        /* Parse zones */
+        Zone zones[MAX_ZONES];
+        int  n_zones = 0;
+        JsonNode *zones_arr = json_get(rnode, "zones");
+        if (zones_arr) {
+            JsonNode *zn = zones_arr->first_child;
+            while (zn && n_zones < MAX_ZONES) {
+                zones[n_zones].r_min    = (float)json_num(json_get(zn, "r_min_km"), 0.0);
+                zones[n_zones].r_max    = (float)json_num(json_get(zn, "r_max_km"), 1.0);
+                zones[n_zones].density  = (float)json_num(json_get(zn, "density"),  1.0);
+                JsonNode *col = json_get(zn, "color");
+                zones[n_zones].r = (float)json_num(json_idx(col, 0), 0.7);
+                zones[n_zones].g = (float)json_num(json_idx(col, 1), 0.7);
+                zones[n_zones].b = (float)json_num(json_idx(col, 2), 0.7);
+                n_zones++;
+                zn = zn->next;
+            }
+        }
+        if (n_zones == 0) { rnode = rnode->next; continue; }
 
-        disc->data_full  = (float*)malloc(disc->n_full * 8 * sizeof(float));
-        disc->data_lod   = (float*)malloc(disc->n_lod  * 8 * sizeof(float));
-        disc->n_arr_full = (float*)malloc(disc->n_full * sizeof(float));
-        disc->n_arr_lod  = (float*)malloc(disc->n_lod  * sizeof(float));
+        ParticleDisc *disc = &s_discs[s_n_discs++];
+        disc->parent_idx     = par_idx;
+        disc->n_full         = n_full;
+        disc->n_lod          = n_lod;
+        disc->sprite_r       = sprite_r;
+        disc->use_generic_sprite = (strcmp(shader_type, "saturn") != 0);
+
+        if (disc->use_generic_sprite) {
+            disc->sp_r_inner_km = (float)json_num(json_get(rnode, "sprite_r_inner_km"), 0.0);
+            disc->sp_r_outer_km = (float)json_num(json_get(rnode, "sprite_r_outer_km"), 1.0);
+            JsonNode *sc = json_get(rnode, "sprite_color");
+            disc->sp_color[0]   = (float)json_num(json_idx(sc, 0), 0.7);
+            disc->sp_color[1]   = (float)json_num(json_idx(sc, 1), 0.7);
+            disc->sp_color[2]   = (float)json_num(json_idx(sc, 2), 0.7);
+            disc->sp_alpha_max  = (float)json_num(json_get(rnode, "sprite_alpha_max"), 0.3);
+        }
+
+        disc->data_full  = (float*)malloc(n_full * 8 * sizeof(float));
+        disc->data_lod   = (float*)malloc(n_lod  * 8 * sizeof(float));
+        disc->n_arr_full = (float*)malloc(n_full * sizeof(float));
+        disc->n_arr_lod  = (float*)malloc(n_lod  * sizeof(float));
         if (!disc->data_full || !disc->data_lod ||
-            !disc->n_arr_full || !disc->n_arr_lod) continue;
+            !disc->n_arr_full || !disc->n_arr_lod) {
+            rnode = rnode->next; continue;
+        }
 
-        /* Ring-plane basis from parent body's obliquity */
-        build_basis(disc, (float)g_bodies[disc->parent_idx].obliquity);
+        build_basis(disc, (float)g_bodies[par_idx].obliquity);
 
-        /* Parent GM */
-        double gm = G_CONST * g_bodies[disc->parent_idx].mass;
+        double gm = G_CONST * g_bodies[par_idx].mass;
+        s_seed(seed_full);
+        bake_particles(disc->data_full, disc->n_arr_full, n_full,
+                       zones, n_zones, gm, e_max, h_scale);
 
-        s_seed(cfg->seed_full);
-        bake_particles(disc->data_full, disc->n_arr_full, disc->n_full,
-                       cfg->zones, cfg->n_zones, gm, cfg->e_max, cfg->h_scale);
+        s_seed(seed_lod);
+        bake_particles(disc->data_lod, disc->n_arr_lod, n_lod,
+                       zones, n_zones, gm, e_max, h_scale);
 
-        s_seed(cfg->seed_lod);
-        bake_particles(disc->data_lod, disc->n_arr_lod, disc->n_lod,
-                       cfg->zones, cfg->n_zones, gm, cfg->e_max, cfg->h_scale);
-
-        init_disc_gl(disc, cfg);
+        init_disc_gl(disc);
         disc->initialized = 1;
+
+        rnode = rnode->next;
     }
+
+    json_free(root);
 }
 
 void rings_tick(double dt)
 {
     const float TWO_PI = 6.28318530718f;
 
-    for (int d = 0; d < N_DISCS; d++) {
+    for (int d = 0; d < s_n_discs; d++) {
         ParticleDisc *disc = &s_discs[d];
         if (!disc->initialized) continue;
 
@@ -452,7 +401,7 @@ void rings_tick(double dt)
 
 void rings_render(const float vp[16])
 {
-    for (int d = 0; d < N_DISCS; d++) {
+    for (int d = 0; d < s_n_discs; d++) {
         if (s_discs[d].initialized)
             render_disc(&s_discs[d], vp);
     }
@@ -460,7 +409,7 @@ void rings_render(const float vp[16])
 
 void rings_shutdown(void)
 {
-    for (int d = 0; d < N_DISCS; d++) {
+    for (int d = 0; d < s_n_discs; d++) {
         ParticleDisc *disc = &s_discs[d];
         free(disc->data_full);   free(disc->data_lod);
         free(disc->n_arr_full);  free(disc->n_arr_lod);
@@ -473,5 +422,7 @@ void rings_shutdown(void)
         if (disc->sprite_vao)    glDeleteVertexArrays(1, &disc->sprite_vao);
         if (disc->sprite_shader) glDeleteProgram(disc->sprite_shader);
     }
-    memset(s_discs, 0, sizeof(s_discs));
+    free(s_discs);
+    s_discs   = NULL;
+    s_n_discs = 0;
 }
