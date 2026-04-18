@@ -20,6 +20,7 @@
 #include "common.h"
 #include "math3d.h"
 #include "body.h"
+#include "universe.h"
 #include "physics.h"
 #include "camera.h"
 #include "starfield.h"
@@ -82,7 +83,7 @@ static int app_init(void) {
         return 0;
     }
 
-    SDL_GL_SetSwapInterval(1);   /* vsync */
+    SDL_GL_SetSwapInterval(0);   /* vsync deactivated for debugging purpose - activate for production*/
 
     /* GLEW */
     glewExperimental = GL_TRUE;
@@ -112,6 +113,7 @@ static void app_quit(void) {
     labels_shutdown();
     trails_gl_shutdown();
     starfield_shutdown();
+    universe_shutdown();
     SDL_GL_DeleteContext(s_ctx);
     SDL_DestroyWindow(s_win);
     SDL_Quit();
@@ -226,13 +228,13 @@ int main(int argc, char **argv) {
     if (!app_init()) return 1;
 
     /* Module initialisation */
-    solar_system_init();
+    universe_load("assets/universe.json");
     cam_reset();
     starfield_init();
     trails_gl_init();
     render_init();
-    rings_init();
-    asteroids_init();
+    rings_init("assets/universe.json");
+    asteroids_init("assets/universe.json");
     labels_init();
     ui_init();
 
@@ -280,12 +282,25 @@ int main(int argc, char **argv) {
         /* Physics — RESPA hierarchical integrator
          * Outer step ~1 day: slow forces (primary-primary + tidal).
          * Inner step 0.02 days: fast forces (parent-satellite dominant).
-         * ~32× fewer pair evaluations than uniform 0.02-day stepping. */
+         * ~32× fewer pair evaluations than uniform 0.02-day stepping.
+         *
+         * sim_dt is capped to MAX_OUTER_STEPS outer steps so that a slow
+         * frame cannot snowball into even-slower subsequent frames (the
+         * lag-spiral).  At extreme sim speeds the simulation runs at a
+         * reduced rate rather than making the UI unresponsive.
+         *
+         * trails_tick is called once per outer step (not every inner step).
+         * The distance-based accumulator in trails_tick sums |v|*dt, so the
+         * total distance is identical whether we call it N×(dt/N) or 1×dt —
+         * this gives ~50× fewer sqrt calls with no change in sample spacing. */
         if (!g_paused && g_sim_speed > 0.0) {
-            double sim_dt = g_sim_speed * dt;
-
-            const double DT_OUTER    = DAY * 1.0;
+            const double DT_OUTER     = DAY * 1.0;
             const double DT_INNER_MAX = DAY * 0.02;
+            const int    MAX_OUTER_STEPS = 120;   /* cap: ~120 sim-days / frame */
+
+            double sim_dt = g_sim_speed * dt;
+            if (sim_dt > DT_OUTER * MAX_OUTER_STEPS)
+                sim_dt = DT_OUTER * MAX_OUTER_STEPS;
 
             int    outer_steps = (int)(sim_dt / DT_OUTER) + 1;
             double dt_outer    = sim_dt / outer_steps;
@@ -296,7 +311,7 @@ int main(int argc, char **argv) {
                 physics_respa_begin(dt_outer);
                 for (int i = 0; i < n_inner; i++) {
                     physics_respa_inner(dt_inner);
-                    trails_tick(dt_inner);
+                    trails_tick(dt_inner);   /* per inner step: captures intermediate positions */
                 }
                 physics_respa_end(dt_outer);
                 asteroids_step(dt_outer);   /* test-particle gravity */

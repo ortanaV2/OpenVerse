@@ -85,9 +85,11 @@ void main() {
     float alpha = glow * u_atm_intensity * lit;
     if (alpha < 0.003) discard;
 
-    /* Logarithmic depth — consistent with phong.frag */
+    /* Logarithmic depth — view-direction depth, consistent with phong.frag
+     * and solid.frag / color.frag (all use eye_depth = 1/gl_FragCoord.w). */
     const float FAR = 2000.0;
-    gl_FragDepth = log2(t_atm + 1.0) / log2(FAR + 1.0);
+    float eye_depth  = t_atm * dot(ray_dir, u_cam_fwd);
+    gl_FragDepth = log2(eye_depth + 1.0) / log2(FAR + 1.0);
 
     frag_color = vec4(u_atm_color * alpha, alpha);
 }

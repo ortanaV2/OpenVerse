@@ -41,6 +41,13 @@ static TTF_Font *s_font = NULL;
 typedef struct { GLuint tex; int w, h; char str[64]; } TextCache;
 static TextCache s_tc_move = {0};
 static TextCache s_tc_sim  = {0};
+static TextCache s_tc_fps  = {0};
+
+/* ------------------------------------------------------------------ FPS smoothing */
+/* Exponential moving average over ~30 frames, updated every UI frame.
+ * We measure time internally so the ui_render() signature stays unchanged. */
+static Uint64 s_fps_prev  = 0;
+static float  s_fps_smooth = 0.0f;
 
 /* ------------------------------------------------------------------ helpers */
 static const char *s_font_paths[] = {
@@ -183,9 +190,23 @@ void ui_render(void) {
             snprintf(ss_str, sizeof(ss_str), "%.0f days/s", days);
     }
 
+    /* FPS — exponential moving average, alpha=0.1 (≈ 10-frame window) */
+    Uint64 now  = SDL_GetPerformanceCounter();
+    Uint64 freq = SDL_GetPerformanceFrequency();
+    if (s_fps_prev != 0 && freq > 0) {
+        float inst = (float)freq / (float)(now - s_fps_prev);
+        s_fps_smooth = (s_fps_smooth == 0.0f) ? inst
+                     : s_fps_smooth + 0.1f * (inst - s_fps_smooth);
+    }
+    s_fps_prev = now;
+
+    char fps_str[32];
+    snprintf(fps_str, sizeof(fps_str), "%.0f fps", (double)s_fps_smooth);
+
     SDL_Color white = {255, 255, 255, 220};
     update_text(&s_tc_move, mv_str, white);
     update_text(&s_tc_sim,  ss_str, white);
+    update_text(&s_tc_fps,  fps_str, white);
 
     /* ---- layout ---- */
     const float BH   = (float)BAR_H;
@@ -222,6 +243,13 @@ void ui_render(void) {
         draw_tex(&s_tc_sim, BX + BW - tw, TY, TH);
     }
 
+    /* FPS — top-right corner, right-aligned to screen edge */
+    if (s_tc_fps.tex) {
+        const float MARGIN = 12.0f;
+        float tw = TH * (float)s_tc_fps.w / (float)s_tc_fps.h;
+        draw_tex(&s_tc_fps, W - tw - MARGIN, TY, TH);
+    }
+
     /* ---- restore ---- */
     glBindVertexArray(0);
     glDisable(GL_BLEND);
@@ -232,6 +260,7 @@ void ui_render(void) {
 void ui_shutdown(void) {
     if (s_tc_move.tex) glDeleteTextures(1, &s_tc_move.tex);
     if (s_tc_sim.tex)  glDeleteTextures(1, &s_tc_sim.tex);
+    if (s_tc_fps.tex)  glDeleteTextures(1, &s_tc_fps.tex);
     if (s_vbo)  glDeleteBuffers(1, &s_vbo);
     if (s_vao)  glDeleteVertexArrays(1, &s_vao);
     if (s_shader) glDeleteProgram(s_shader);

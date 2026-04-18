@@ -191,20 +191,19 @@ void main() {
     vec3 hit_rel = u_oc + t * ray_dir;
     vec3 N       = normalize(hit_rel);
 
-    /* ---- true sphere-surface depth ------------------------------------
-     * Computed directly from t (camera-to-surface distance) rather than
-     * by projecting the world-space hit point.  This avoids catastrophic
-     * float cancellation when the body is far from the origin, and makes
-     * the sphere depth exactly consistent with the dot depth computed by
-     * the standard GL pipeline for camera-relative positions.
-     * Formula: depth = (FAR/(FAR-NEAR)) * (1 - NEAR/t)
-     * Derivation: standard perspective NDC z mapped to [0,1],
-     *             simplified for z_eye = t (positive camera distance). */
-    /* ---- logarithmic depth — gives ~50-bit precision at Phobos-vs-Mars
-     * distances instead of ~1 bit with standard linear depth.
-     * log2(t+1) / log2(FAR+1) maps [0,FAR] → [0,1] monotonically.     */
-    const float FAR = 2000.0;
-    gl_FragDepth = log2(t + 1.0) / log2(FAR + 1.0);
+    /* ---- logarithmic depth — consistent with solid.frag / color.frag
+     * All shaders must use the same depth metric: view-direction depth
+     * (eye_depth = distance along the view axis, NOT Euclidean distance).
+     * Using raw t (Euclidean) causes t > eye_depth off-centre, making the
+     * planet appear deeper in the log buffer than rings/trails, which use
+     * 1/gl_FragCoord.w = eye_depth.  The mismatch only shows when the body
+     * is not centred on screen (rings render in front of the sphere limb).
+     *
+     * eye_depth = t * dot(ray_dir, u_cam_fwd)  [= t * cos(θ) off-axis]
+     * This equals 1/gl_FragCoord.w for all non-raycast geometry.         */
+    const float FAR  = 2000.0;
+    float eye_depth  = t * dot(ray_dir, u_cam_fwd);
+    gl_FragDepth = log2(eye_depth + 1.0) / log2(FAR + 1.0);
 
     /* ---- emissive (stars) --------------------------------------------- */
     if (u_emission > 0.5) {

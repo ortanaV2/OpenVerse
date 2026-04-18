@@ -56,7 +56,8 @@ typedef struct {
     int    initialized;
 } ParticleDisc;
 
-void rings_init(void);
+/* rings_init — parse ring configs from the given universe.json path. */
+void rings_init(const char *path);
 void rings_tick(double dt);         /* advance mean anomalies — call each physics sub-step */
 void rings_render(const float vp[16]);
 void rings_shutdown(void);

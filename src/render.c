@@ -46,7 +46,7 @@ static GLint  s_sp_rotation    = -1;
 static GLint  s_sp_obliquity   = -1;
 static GLint  s_sp_ptype       = -1;
 
-/* Planet-type mapping by body index (matches solar_system_init order).
+/* Planet-type mapping by body index (matches universe.json loading order).
  * 0=rocky  1=Earth  2=Mars  3=Venus  4=Jupiter  5=Saturn
  * 6=ice-giant  7=Io  8=Titan  9=Europa                      */
 static const int s_planet_types[] = {
@@ -99,44 +99,9 @@ static GLint  s_at_sun_rel   = -1;
 static GLint  s_at_color     = -1;
 static GLint  s_at_intensity = -1;
 
-/* Per-body atmosphere: {R, G, B, intensity, scale}
- * scale:     outer atmosphere radius as multiple of planet radius.
- * intensity: peak glow strength (0.0 = no atmosphere).            */
-static const float s_atm[][5] = {
-    {0,0,0,  0.00f, 0.00f},              /*  0 Sun       */
-    {0,0,0,  0.00f, 0.00f},              /*  1 Mercury   */
-    {0.92f,0.84f,0.56f, 0.78f, 1.50f},  /*  2 Venus — thick yellow-white */
-    {0.45f,0.65f,1.00f, 0.60f, 1.30f},  /*  3 Earth — blue rim           */
-    {0.85f,0.45f,0.25f, 0.35f, 1.22f},  /*  4 Mars  — thin pinkish       */
-    {0.90f,0.72f,0.50f, 0.32f, 1.25f},  /*  5 Jupiter                    */
-    {0.90f,0.82f,0.62f, 0.28f, 1.25f},  /*  6 Saturn                     */
-    {0.60f,0.90f,1.00f, 0.23f, 1.25f},  /*  7 Uranus                     */
-    {0.30f,0.50f,1.00f, 0.23f, 1.25f},  /*  8 Neptune                    */
-    {0,0,0,  0.00f, 0.00f},              /*  9 Ceres     */
-    {0,0,0,  0.00f, 0.00f},              /* 10 Pluto     */
-    {0,0,0,  0.00f, 0.00f},              /* 11 Eris      */
-    {0,0,0,  0.00f, 0.00f},              /* 12 Makemake  */
-    {0,0,0,  0.00f, 0.00f},              /* 13 Haumea    */
-    {0,0,0,  0.00f, 0.00f},              /* 14 Moon      */
-    {0,0,0,  0.00f, 0.00f},              /* 15 Phobos    */
-    {0,0,0,  0.00f, 0.00f},              /* 16 Deimos    */
-    {0,0,0,  0.00f, 0.00f},              /* 17 Io        */
-    {0,0,0,  0.00f, 0.00f},              /* 18 Europa    */
-    {0,0,0,  0.00f, 0.00f},              /* 19 Ganymede  */
-    {0,0,0,  0.00f, 0.00f},              /* 20 Callisto  */
-    {0,0,0,  0.00f, 0.00f},              /* 21 Mimas     */
-    {0,0,0,  0.00f, 0.00f},              /* 22 Enceladus */
-    {0,0,0,  0.00f, 0.00f},              /* 23 Tethys    */
-    {0,0,0,  0.00f, 0.00f},              /* 24 Dione     */
-    {0,0,0,  0.00f, 0.00f},              /* 25 Rhea      */
-    {0.75f,0.50f,0.20f, 0.78f, 1.45f},  /* 26 Titan — dense orange haze  */
-    {0,0,0,  0.00f, 0.00f},              /* 27 Miranda   */
-    {0,0,0,  0.00f, 0.00f},              /* 28 Ariel     */
-    {0,0,0,  0.00f, 0.00f},              /* 29 Umbriel   */
-    {0,0,0,  0.00f, 0.00f},              /* 30 Titania   */
-    {0,0,0,  0.00f, 0.00f},              /* 31 Oberon    */
-    {0,0,0,  0.00f, 0.00f},              /* 32 Triton    */
-};
+/* Atmosphere data is now stored per-body in g_bodies[i].atm_color/intensity/scale,
+ * populated by universe_load() from assets/universe.json.
+ * No hardcoded table needed here. */
 
 /* ------------------------------------------------------------------ dots */
 static GLuint s_dot_shader  = 0;
@@ -403,8 +368,6 @@ void render_frame(const float view[16], const float proj[16],
      * Additive pass (GL_SRC_ALPHA / GL_ONE), depth-tested but no depth writes.
      * Uses the same sphere billboard VAO and camera-relative VP as the sphere pass. */
     if (s_atm_shader) {
-        const int N_ATM = (int)(sizeof(s_atm) / sizeof(s_atm[0]));
-
         glUseProgram(s_atm_shader);
         glUniformMatrix4fv(s_at_vp, 1, GL_FALSE, vp_camrel);
         glUniform3f(s_at_cam_right, cam_right[0], cam_right[1], cam_right[2]);
@@ -417,10 +380,10 @@ void render_frame(const float view[16], const float proj[16],
         glEnable(GL_DEPTH_TEST);
         glBindVertexArray(s_sphere_vao);
 
-        for (int i = 0; i < g_nbodies && i < N_ATM; i++) {
+        for (int i = 0; i < g_nbodies; i++) {
             if (info[i].show) continue;     /* sub-pixel body — skip */
-            float intensity = s_atm[i][3];
-            float scale     = s_atm[i][4];
+            float intensity = g_bodies[i].atm_intensity;
+            float scale     = g_bodies[i].atm_scale;
             if (intensity <= 0.0f) continue;
 
             Body *b = &g_bodies[i];
@@ -442,7 +405,7 @@ void render_frame(const float view[16], const float proj[16],
             glUniform1f(s_at_planet_r,  planet_r);
             glUniform3f(s_at_oc,        oc_x, oc_y, oc_z);
             glUniform3f(s_at_sun_rel,   sr_x, sr_y, sr_z);
-            glUniform3f(s_at_color,     s_atm[i][0], s_atm[i][1], s_atm[i][2]);
+            glUniform3f(s_at_color,     g_bodies[i].atm_color[0], g_bodies[i].atm_color[1], g_bodies[i].atm_color[2]);
             glUniform1f(s_at_intensity, intensity);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }

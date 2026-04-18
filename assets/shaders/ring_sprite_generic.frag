@@ -35,5 +35,12 @@ void main() {
     float alpha  = smoothstep(u_r_inner_km,           u_r_inner_km + fade_w, r_km)
                  * smoothstep(u_r_outer_km,           u_r_outer_km - fade_w, r_km);
 
+    /* Logarithmic depth — must match phong.frag / solid.frag.
+     * Without this the depth comparison between ring and planet uses
+     * mismatched scales (linear vs. log), causing the ring to render
+     * in front of the planet when viewed off-centre.                    */
+    const float FAR = 2000.0;
+    gl_FragDepth = log2(1.0 / gl_FragCoord.w + 1.0) / log2(FAR + 1.0);
+
     frag_color = vec4(u_ring_color, u_alpha_max * alpha);
 }

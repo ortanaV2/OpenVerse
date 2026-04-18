@@ -26,11 +26,13 @@
 #include "camera.h"
 #include "physics.h"
 #include "gl_utils.h"
+#include "json.h"
 #include "common.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define GM_SUN_SI  1.327124e20   /* m³/s² */
 #define MAX_MAJOR  32            /* upper bound for major-body cache */
@@ -117,9 +119,9 @@ typedef struct {
     int    initialized;
 } Belt;
 
-static Belt   s_main;
-static Belt   s_kuiper;
-static float *s_upload_buf;  /* reused each frame: PFP × max(n_main, n_kuiper) */
+static Belt  *s_belts      = NULL;
+static int    s_n_belts    = 0;
+static float *s_upload_buf = NULL;   /* PFP × max(n) across all belts */
 
 /* ── bake ───────────────────────────────────────────────────────── */
 static Particle *bake(int n,
@@ -174,28 +176,62 @@ static int init_belt_gl(Belt *b)
 
 /* ── public ─────────────────────────────────────────────────────── */
 
-void asteroids_init(void) {
-    memset(&s_main,   0, sizeof(s_main));
-    memset(&s_kuiper, 0, sizeof(s_kuiper));
+void asteroids_init(const char *path)
+{
+    JsonNode *root = json_parse_file(path);
+    if (!root) {
+        fprintf(stderr, "[Asteroids] cannot parse '%s'\n", path);
+        return;
+    }
 
-    /* Main Belt: 2.2–3.2 AU, e≤0.25, i≤20°, 4 000 particles */
-    s_main.n          = 4000;
-    s_main.color[0]   = 0.52f; s_main.color[1] = 0.49f; s_main.color[2] = 0.45f;
-    s_main.fade_start = 5.0f;
-    s_main.fade_end   = 12.0f;
-    s_main.p = bake(s_main.n, 2.2f, 3.2f, 0.25f, 20.0f, 0xA1B2C3D4u);
-    if (s_main.p) init_belt_gl(&s_main);
+    JsonNode *belts_arr = json_get(root, "asteroid_belts");
+    if (!belts_arr || belts_arr->type != JSON_ARRAY) {
+        fprintf(stderr, "[Asteroids] no 'asteroid_belts' in '%s' — skipping\n", path);
+        json_free(root);
+        return;
+    }
 
-    /* Kuiper Belt: 39–48 AU, e≤0.15, i≤20°, 2 000 particles */
-    s_kuiper.n          = 2000;
-    s_kuiper.color[0]   = 0.54f; s_kuiper.color[1] = 0.54f; s_kuiper.color[2] = 0.58f;
-    s_kuiper.fade_start = 40.0f;
-    s_kuiper.fade_end   = 80.0f;
-    s_kuiper.p = bake(s_kuiper.n, 39.0f, 48.0f, 0.15f, 20.0f, 0x11223344u);
-    if (s_kuiper.p) init_belt_gl(&s_kuiper);
+    /* Count */
+    int count = 0;
+    { JsonNode *n = belts_arr->first_child; while (n) { count++; n = n->next; } }
+    if (count == 0) { json_free(root); return; }
 
-    int cap = s_main.n > s_kuiper.n ? s_main.n : s_kuiper.n;
-    s_upload_buf = (float*)malloc(cap * PFP * sizeof(float));
+    s_belts   = (Belt*)calloc(count, sizeof(Belt));
+    s_n_belts = 0;
+    if (!s_belts) { json_free(root); return; }
+
+    int max_n = 0;
+
+    JsonNode *bnode = belts_arr->first_child;
+    while (bnode) {
+        int   n           = (int)json_num(json_get(bnode, "n_particles"),  1000);
+        float a_min       = (float)json_num(json_get(bnode, "a_min_au"),    2.0);
+        float a_max       = (float)json_num(json_get(bnode, "a_max_au"),    3.0);
+        float e_max       = (float)json_num(json_get(bnode, "e_max"),       0.2);
+        float i_max       = (float)json_num(json_get(bnode, "i_max_deg"),  20.0);
+        uint32_t seed     = (uint32_t)json_num(json_get(bnode, "seed"),    1234);
+        float fade_start  = (float)json_num(json_get(bnode, "fade_start_au"), 5.0);
+        float fade_end    = (float)json_num(json_get(bnode, "fade_end_au"),  10.0);
+        JsonNode *col     = json_get(bnode, "color");
+
+        Belt *b = &s_belts[s_n_belts++];
+        b->n          = n;
+        b->color[0]   = (float)json_num(json_idx(col, 0), 0.6);
+        b->color[1]   = (float)json_num(json_idx(col, 1), 0.6);
+        b->color[2]   = (float)json_num(json_idx(col, 2), 0.6);
+        b->fade_start = fade_start;
+        b->fade_end   = fade_end;
+        b->p = bake(n, a_min, a_max, e_max, i_max, seed);
+        if (b->p) init_belt_gl(b);
+        if (n > max_n) max_n = n;
+
+        bnode = bnode->next;
+    }
+
+    if (max_n > 0)
+        s_upload_buf = (float*)malloc(max_n * PFP * sizeof(float));
+
+    json_free(root);
 }
 
 /*
@@ -220,9 +256,8 @@ void asteroids_step(double dt) {
         nb++;
     }
 
-    Belt *belts[2] = {&s_main, &s_kuiper};
-    for (int b = 0; b < 2; b++) {
-        Belt *belt = belts[b];
+    for (int b = 0; b < s_n_belts; b++) {
+        Belt *belt = &s_belts[b];
         if (!belt->initialized) continue;
 
         for (int i = 0; i < belt->n; i++) {
@@ -292,21 +327,21 @@ static void render_belt(Belt *b, const float vp[16],
 void asteroids_render(const float vp_camrel[16],
                       float cam_x, float cam_y, float cam_z)
 {
-    render_belt(&s_main,   vp_camrel, cam_x, cam_y, cam_z);
-    render_belt(&s_kuiper, vp_camrel, cam_x, cam_y, cam_z);
+    for (int b = 0; b < s_n_belts; b++)
+        render_belt(&s_belts[b], vp_camrel, cam_x, cam_y, cam_z);
 }
 
 void asteroids_shutdown(void) {
     free(s_upload_buf); s_upload_buf = NULL;
 
-    Belt *belts[2] = {&s_main, &s_kuiper};
-    for (int b = 0; b < 2; b++) {
-        Belt *belt = belts[b];
+    for (int b = 0; b < s_n_belts; b++) {
+        Belt *belt = &s_belts[b];
         free(belt->p);
         if (belt->vbo)    glDeleteBuffers(1,      &belt->vbo);
         if (belt->vao)    glDeleteVertexArrays(1, &belt->vao);
         if (belt->shader) glDeleteProgram(belt->shader);
     }
-    memset(&s_main,   0, sizeof(s_main));
-    memset(&s_kuiper, 0, sizeof(s_kuiper));
+    free(s_belts);
+    s_belts   = NULL;
+    s_n_belts = 0;
 }
