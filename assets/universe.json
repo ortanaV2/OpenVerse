@@ -652,13 +652,13 @@
     {
       "name": "Alpha Cen A",
       "type": "star",
-      "pos_ly": [3.994, -0.914, -1.328],
+      "pos_ly": [4.020506, -0.919840, -1.336536],
       "mass": 2.188e30,
       "radius_km": 855300.0,
       "color": [1.0, 0.88, 0.55],
       "obliquity_deg": 0.0,
       "rotation_period_days": 22.0,
-      "velocity_km_s": [-22.2, 4.1, 2.9]
+      "velocity_km_s": [-23.406, 4.1, -0.845]
     },
 
     // ================================================================
@@ -699,26 +699,26 @@
 
     // ================================================================
     // Alpha Centauri B — 4.37 ly
-    // K1V; binary companion to Alpha Cen A, orbital period ~79.9 yr,
-    // current projected separation ~21 AU.  No confirmed planets.
+    // K1V; binary companion to Alpha Cen A, orbital period ~79.9 yr.
+    // Initialized as a bound barycentric pair with ~23.5 AU separation.
     // ================================================================
     {
       "name": "Alpha Cen B",
       "type": "star",
-      "pos_ly": [4.053, -0.927, -1.347],
+      "pos_ly": [4.020852, -0.919917, -1.336647],
       "mass": 1.804e30,
       "radius_km": 600300.0,
       "color": [1.0, 0.82, 0.50],
       "obliquity_deg": 0.0,
       "rotation_period_days": 41.4,
-      "velocity_km_s": [-22.2, 4.1, 2.9]
+      "velocity_km_s": [-20.737, 4.1, 7.442]
     },
 
     // ================================================================
     // Barnard's Star — 5.96 ly
     // M4Ve red dwarf, highest proper motion of any star (~10.4"/yr).
     // Heliocentric radial velocity ~-110 km/s (approaching).
-    // No confirmed planets (Barnard b claim retracted).
+    // Compact confirmed sub-Earth planets are not included yet.
     // ================================================================
     {
       "name": "Barnard's Star",
@@ -757,30 +757,31 @@
     {
       "name": "Sirius A",
       "type": "star",
-      "pos_ly": [4.85, 3.10, -6.40],
+      "pos_ly": [4.850595, 3.100595, -6.399108],
       "mass": 4.103e30,
       "radius_km": 1189900.0,
       "color": [0.82, 0.90, 1.0],
       "obliquity_deg": 0.0,
       "rotation_period_days": 1.7,
-      "velocity_km_s": [-5.3, 12.2, -11.8]
+      "velocity_km_s": [-2.168, 12.2, -13.888]
     },
 
     // ================================================================
     // Sirius B — 8.60 ly
     // DA2 white dwarf companion to Sirius A; ~0.98 M☉ packed into a
     // body roughly the size of Earth.  Orbital period ~50.1 yr.
+    // Initialized as a bound barycentric pair with ~19.7 AU separation.
     // ================================================================
     {
       "name": "Sirius B",
       "type": "star",
-      "pos_ly": [4.852, 3.102, -6.397],
+      "pos_ly": [4.850746, 3.100746, -6.398881],
       "mass": 1.945e30,
       "radius_km": 5800.0,
       "color": [0.92, 0.94, 1.0],
       "obliquity_deg": 0.0,
       "rotation_period_days": 0.5,
-      "velocity_km_s": [-5.3, 12.2, -11.8]
+      "velocity_km_s": [-11.906, 12.2, -7.396]
     },
 
     // ================================================================
@@ -843,13 +844,13 @@
     {
       "name": "61 Cygni A",
       "type": "star",
-      "pos_ly": [3.16, -2.96, 10.55],
+      "pos_ly": [3.160572, -2.960286, 10.549428],
       "mass": 1.408e30,
       "radius_km": 503400.0,
       "color": [1.0, 0.75, 0.42],
       "obliquity_deg": 0.0,
       "rotation_period_days": 35.4,
-      "velocity_km_s": [-62.5, 43.2, 56.3]
+      "velocity_km_s": [-63.800, 43.2, 55.000]
     },
 
     // ================================================================
@@ -859,13 +860,13 @@
     {
       "name": "61 Cygni B",
       "type": "star",
-      "pos_ly": [3.162, -2.961, 10.548],
+      "pos_ly": [3.161457, -2.960729, 10.548543],
       "mass": 1.318e30,
       "radius_km": 465300.0,
       "color": [1.0, 0.68, 0.35],
       "obliquity_deg": 0.0,
       "rotation_period_days": 37.8,
-      "velocity_km_s": [-62.5, 43.2, 56.3]
+      "velocity_km_s": [-61.111, 43.2, 57.689]
     },
 
     // ================================================================
