@@ -327,6 +327,7 @@ void render_frame(const float view[16], const float proj[16],
 
         /* Sub-pixel bodies are shown as dots only — skip billboard render. */
         if (info[i].show) continue;
+        if (b->is_star) continue;
 
         /* Compute oc = cam - center in double to avoid float cancellation. */
         double cam_mx = (double)g_cam.pos[0] * AU;
@@ -630,16 +631,9 @@ void render_frame(const float view[16], const float proj[16],
     trails_render(vp_camrel);
 
     /* ------------------------------------------------------------------ 6. Star glare
-     * Additive (GL_ONE / GL_ONE) pass over all opaque geometry.
-     * Depth test and depth writes are both disabled — the glare is a camera
-     * lens effect and should always be visible regardless of scene depth.
-     * Only drawn when the star is roughly in front of the camera.           */
+     * Draw after trails so stellar glare hides orbit lines inside the glow.
+     * Depth test stays enabled, so foreground opaque bodies still eclipse it. */
     if (s_glare_shader) {
-        /* Star glare uses vp_camrel (rotation-only) so the centre is passed
-         * as a camera-relative offset.  This lets us clamp distant stars to
-         * within the near/far range (the star at 63 000 AU in warp mode would
-         * otherwise be clipped by the far plane).  The radius is scaled by the
-         * same factor to maintain the star's angular size on screen.          */
         const float GLARE_MAX_DIST = 1500.0f;
 
         glUseProgram(s_glare_shader);
@@ -648,27 +642,22 @@ void render_frame(const float view[16], const float proj[16],
         glUniform3f(s_gl_up,    cam_up[0],    cam_up[1],    cam_up[2]);
 
         glEnable(GL_BLEND);
-        glBlendFunc(GL_ONE, GL_ONE);   /* additive */
+        glBlendFunc(GL_ONE, GL_ONE);
         glDepthMask(GL_FALSE);
-        glDisable(GL_DEPTH_TEST);
-
+        glEnable(GL_DEPTH_TEST);
         glBindVertexArray(s_sphere_vao);
 
         for (int i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].is_star) continue;
 
-            /* Camera-relative star position (double precision → float) */
             float rx = (float)(g_bodies[i].pos[0] * RS - g_cam.pos[0]);
             float ry = (float)(g_bodies[i].pos[1] * RS - g_cam.pos[1]);
             float rz = (float)(g_bodies[i].pos[2] * RS - g_cam.pos[2]);
 
-            /* Skip if star is behind the camera */
             if (rx*cam_fwd[0] + ry*cam_fwd[1] + rz*cam_fwd[2] < 0.0f) continue;
 
-            /* Clamp distance to keep the billboard within the view frustum.
-             * Radius is scaled proportionally to preserve angular size.       */
             float dist   = sqrtf(rx*rx + ry*ry + rz*rz);
-            float radius = info[i].dr;
+            float radius = (float)(g_bodies[i].radius * RS);
             if (dist > GLARE_MAX_DIST && dist > 1e-6f) {
                 float s = GLARE_MAX_DIST / dist;
                 rx *= s; ry *= s; rz *= s;
@@ -683,7 +672,6 @@ void render_frame(const float view[16], const float proj[16],
         }
 
         glBindVertexArray(0);
-        glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }

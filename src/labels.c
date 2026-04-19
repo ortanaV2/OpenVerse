@@ -19,8 +19,9 @@
 #define MAX_LABEL_DIST   55.0f  /* AU — hard far cutoff for non-star labels    */
 /* Hide label once camera is closer than this many body-radii to the centre.
  * Prevents the label from sitting inside the billboard when you're landing.
- * Stars are always exempt (no close- or far-distance cutoff).               */
+ * Stars use a larger close cutoff because glare dominates sooner.            */
 #define MIN_LABEL_RADII  10
+#define STAR_MIN_LABEL_RADII  80
 #define LBL_PAD        6.0f    /* extra px padding for overlap AABB  */
 #define LABEL_PX_H    14.0f    /* desired label height in pixels     */
 
@@ -180,12 +181,17 @@ void labels_render(const float view[16], const float proj[16],
         order[i]   = i;
         lvis[i]    = 0;
         if (!s_tex[i]) continue;
-        if (!g_bodies[i].is_star) {
-            /* Far cutoff: same hard limit as before */
-            if (info[i].dcam > MAX_LABEL_DIST) continue;
-            /* Close cutoff: hide once inside MIN_LABEL_RADII body-radii.
-             * Keeps the label from hovering inside the planet when landing. */
-            if (info[i].dcam < (float)MIN_LABEL_RADII * info[i].dr) continue;
+        /* Far cutoff: non-star labels are local-system annotations. */
+        if (!g_bodies[i].is_star && info[i].dcam > MAX_LABEL_DIST) continue;
+
+        /* Close cutoff applies to every body, including stars.
+         * Otherwise star labels linger until the projection/overlap logic
+         * happens to reject them, which feels inconsistent when approaching. */
+        {
+            float min_radii = g_bodies[i].is_star
+                            ? (float)STAR_MIN_LABEL_RADII
+                            : (float)MIN_LABEL_RADII;
+            if (info[i].dcam < min_radii * info[i].dr) continue;
         }
 
         /* Anchor: just above the body centre.

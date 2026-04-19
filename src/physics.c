@@ -35,6 +35,15 @@ static int has_fast_parent(int i) {
     return g_bodies[i].parent >= 0;
 }
 
+static int is_ancestor_of(int ancestor, int child) {
+    int p = g_bodies[child].parent;
+    while (p >= 0) {
+        if (p == ancestor) return 1;
+        p = g_bodies[p].parent;
+    }
+    return 0;
+}
+
 /* ── slow forces: primary-primary + non-parent tidal on satellites ───── */
 static void compute_acc_slow(void) {
     int i, j;
@@ -46,8 +55,7 @@ static void compute_acc_slow(void) {
             /* skip satellite-satellite (negligible and expensive) */
             if (is_satellite(i) && is_satellite(j)) continue;
             /* skip parent-satellite pair — handled by fast forces */
-            if (has_fast_parent(j) && g_bodies[j].parent == i) continue;
-            if (has_fast_parent(i) && g_bodies[i].parent == j) continue;
+            if (is_ancestor_of(i, j) || is_ancestor_of(j, i)) continue;
 
             double dx = g_bodies[j].pos[0] - g_bodies[i].pos[0];
             double dy = g_bodies[j].pos[1] - g_bodies[i].pos[1];
@@ -81,25 +89,25 @@ static void compute_acc_fast(void) {
 
     for (i = 0; i < g_nbodies; i++) {
         if (!has_fast_parent(i)) continue;
-        int p = g_bodies[i].parent;
-
-        double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
-        double dy = g_bodies[p].pos[1] - g_bodies[i].pos[1];
-        double dz = g_bodies[p].pos[2] - g_bodies[i].pos[2];
-        double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
-        if (G_CONST * g_bodies[p].mass / r2 < GRAV_EPSILON) continue;
-        double r  = sqrt(r2);
-        double f  = G_CONST / (r2 * r);
+        for (int p = g_bodies[i].parent; p >= 0; p = g_bodies[p].parent) {
+            double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
+            double dy = g_bodies[p].pos[1] - g_bodies[i].pos[1];
+            double dz = g_bodies[p].pos[2] - g_bodies[i].pos[2];
+            double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
+            if (G_CONST * g_bodies[p].mass / r2 < GRAV_EPSILON) continue;
+            double r  = sqrt(r2);
+            double f  = G_CONST / (r2 * r);
 
         /* satellite accelerated toward parent */
-        g_bodies[i].fast_acc[0] = f * g_bodies[p].mass * dx;
-        g_bodies[i].fast_acc[1] = f * g_bodies[p].mass * dy;
-        g_bodies[i].fast_acc[2] = f * g_bodies[p].mass * dz;
+            g_bodies[i].fast_acc[0] += f * g_bodies[p].mass * dx;
+            g_bodies[i].fast_acc[1] += f * g_bodies[p].mass * dy;
+            g_bodies[i].fast_acc[2] += f * g_bodies[p].mass * dz;
 
         /* reaction on parent (Newton 3rd — small but correct) */
-        g_bodies[p].fast_acc[0] -= f * g_bodies[i].mass * dx;
-        g_bodies[p].fast_acc[1] -= f * g_bodies[i].mass * dy;
-        g_bodies[p].fast_acc[2] -= f * g_bodies[i].mass * dz;
+            g_bodies[p].fast_acc[0] -= f * g_bodies[i].mass * dx;
+            g_bodies[p].fast_acc[1] -= f * g_bodies[i].mass * dy;
+            g_bodies[p].fast_acc[2] -= f * g_bodies[i].mass * dz;
+        }
     }
 }
 
