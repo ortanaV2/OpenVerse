@@ -237,11 +237,14 @@ void render_frame(const float view[16], const float proj[16],
     Mat4 vp_camrel;
     mat4_mul(vp_camrel, proj, view_rot);
 
-    /* Camera basis vectors in world space (extracted from view matrix) */
+    /* Camera basis vectors in world space.
+     * Use view_rot, not the full float-eye view matrix.  The full view is kept
+     * only for rings near Sol; extracting axes from it reintroduces the same
+     * large-coordinate float cancellation that view_rot was created to avoid. */
     Vec3 cam_right, cam_up, cam_fwd;
-    mat4_get_right(view, cam_right);
-    mat4_get_up   (view, cam_up);
-    mat4_get_fwd  (view, cam_fwd);
+    mat4_get_right(view_rot, cam_right);
+    mat4_get_up   (view_rot, cam_up);
+    mat4_get_fwd  (view_rot, cam_fwd);
 
     /* Sun position in world space (AU) — used directly for lighting */
     float sun_wx = (float)(g_bodies[0].pos[0] * RS);
@@ -275,6 +278,9 @@ void render_frame(const float view[16], const float proj[16],
 
     /* Per-body render info also filled for labels */
     BodyRenderInfo info[MAX_BODIES];
+    /* Per-body projected radius in pixels — used for dot fade near sphere pop-in */
+    float body_px[MAX_BODIES];
+    memset(body_px, 0, sizeof(body_px));
 
     for (int i = 0; i < g_nbodies; i++) {
         Body *b = &g_bodies[i];
@@ -316,6 +322,7 @@ void render_frame(const float view[16], const float proj[16],
          * at diameter 2*1.25 = 2.5px — exactly matching the dot size.
          * Using px < 2.5 (old value) made the sphere pop in at 5px diameter,
          * which was 2× bigger than the dot and visually jarring. */
+        body_px[i]   = px;
         info[i].show = (px < 1.25f) ? 1 : 0;
 
         /* Sub-pixel bodies are shown as dots only — skip billboard render. */
@@ -458,43 +465,76 @@ void render_frame(const float view[16], const float proj[16],
     for (int i = 0; i < dot_np; i++) dot_order[dot_ns + i]          = dot_planets[i];
     for (int i = 0; i < dot_nm; i++) dot_order[dot_ns + dot_np + i] = dot_moons[i];
 
-    /* Project to screen, greedy overlap removal, collect surviving dots */
+    /* Project to screen, greedy overlap removal, collect surviving dots.
+     *
+     * IMPORTANT: use vp_camrel (rotation-only VP) with camera-relative
+     * positions computed in double precision, NOT vp (full VP with float
+     * translation) with absolute float world positions.  At 4+ ly the
+     * camera offset is ~250,000 AU; a float32 absolute position and the
+     * float translation term in vp nearly cancel, losing ~4 digits of
+     * precision → star screen positions jump randomly on each frame →
+     * visible as jerky "camera stutter" when moving at interstellar distances. */
     float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
     int   dot_vis[MAX_BODIES];
     memset(dot_vis, 0, sizeof(dot_vis));
 
-    for (int oi = 0; oi < g_nbodies; oi++) {
-        int i = dot_order[oi];
-        if (!info[i].show) continue;   /* rendered as full sphere — no dot */
-        float sx, sy;
-        if (!mat4_project(vp, info[i].pos[0], info[i].pos[1], info[i].pos[2],
-                          WIN_W, WIN_H, &sx, &sy)) continue;
-        /* Check against all already-accepted dots */
-        int blocked = 0;
-        for (int oj = 0; oj < oi; oj++) {
-            int j = dot_order[oj];
-            if (!dot_vis[j]) continue;
-            float dx = sx - dot_sx[j], dy = sy - dot_sy[j];
-            if (dx*dx + dy*dy < DOT_EXCL_PX * DOT_EXCL_PX)
-                { blocked = 1; break; }
-        }
-        if (!blocked) {
-            dot_sx[i]  = sx;
-            dot_sy[i]  = sy;
-            dot_vis[i] = 1;
+    {
+        const float DOT_CLAMP_DIST_OV = 1500.0f;
+        double cx2 = g_cam.pos[0];
+        double cy2 = g_cam.pos[1];
+        double cz2 = g_cam.pos[2];
+
+        for (int oi = 0; oi < g_nbodies; oi++) {
+            int i = dot_order[oi];
+            if (!info[i].show) continue;   /* rendered as full sphere — no dot */
+            Body *bi = &g_bodies[i];
+
+            /* Camera-relative position in double → float (no float cancellation) */
+            float rx = (float)(bi->pos[0] * RS - cx2);
+            float ry = (float)(bi->pos[1] * RS - cy2);
+            float rz = (float)(bi->pos[2] * RS - cz2);
+            /* Clamp distant stars (same rule as the dot render below) */
+            if (bi->is_star) {
+                float d = sqrtf(rx*rx + ry*ry + rz*rz);
+                if (d > DOT_CLAMP_DIST_OV && d > 1e-6f) {
+                    float s = DOT_CLAMP_DIST_OV / d;
+                    rx *= s; ry *= s; rz *= s;
+                }
+            }
+
+            float sx, sy;
+            if (!mat4_project(vp_camrel, rx, ry, rz, WIN_W, WIN_H, &sx, &sy)) continue;
+
+            /* Check against all already-accepted dots */
+            int blocked = 0;
+            for (int oj = 0; oj < oi; oj++) {
+                int j = dot_order[oj];
+                if (!dot_vis[j]) continue;
+                float dx = sx - dot_sx[j], dy = sy - dot_sy[j];
+                if (dx*dx + dy*dy < DOT_EXCL_PX * DOT_EXCL_PX)
+                    { blocked = 1; break; }
+            }
+            if (!blocked) {
+                dot_sx[i]  = sx;
+                dot_sy[i]  = sy;
+                dot_vis[i] = 1;
+            }
         }
     }
 
     /* Distance from camera to nearest star — used for LOD dot fade.
      * Non-star dots fade from full brightness at SYS_DOT_FADE_START to black
      * (invisible against the near-black background) at SYS_DOT_FADE_END.
-     * The star dot is always kept at full brightness.                        */
+     * The star dot is always kept at full brightness.
+     * Subtraction is done in double BEFORE casting to float to avoid the
+     * catastrophic float cancellation that occurs at 4+ ly (camera and star
+     * both at ~250,000 AU → float32 difference is meaningless).               */
     float dot_fade = 1.0f;
     {
         int ref_star = nearest_star_idx();
-        float sdx = (float)(g_cam.pos[0]) - (float)(g_bodies[ref_star].pos[0] * RS);
-        float sdy = (float)(g_cam.pos[1]) - (float)(g_bodies[ref_star].pos[1] * RS);
-        float sdz = (float)(g_cam.pos[2]) - (float)(g_bodies[ref_star].pos[2] * RS);
+        float sdx = (float)(g_cam.pos[0] - g_bodies[ref_star].pos[0] * RS);
+        float sdy = (float)(g_cam.pos[1] - g_bodies[ref_star].pos[1] * RS);
+        float sdz = (float)(g_cam.pos[2] - g_bodies[ref_star].pos[2] * RS);
         float dist_star = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
         dot_fade = 1.0f - (dist_star - SYS_DOT_FADE_START)
                         / (SYS_DOT_FADE_END - SYS_DOT_FADE_START);
@@ -508,7 +548,12 @@ void render_frame(const float view[16], const float proj[16],
      * vp_camrel (proj × view_rot, no translation) so the GL depth values
      * are produced by the same formula as the sphere shader's gl_FragDepth,
      * avoiding any world-space float cancellation at large distances.
-     * Non-star dots have their RGB multiplied by dot_fade (fade to black).   */
+     * Non-star dots have their RGB multiplied by dot_fade (fade to black).
+     *
+     * Sphere-approach fade: when a body's projected radius px approaches the
+     * dot→sphere threshold (1.25 px), the dot's brightness fades from 1.0 at
+     * px=0.75 to 0.2 at px=1.25.  This prevents the jarring jump from a
+     * bright dot to a just-appearing sphere at the transition point.          */
     float dot_data[MAX_BODIES * 6];
     int   dot_count = 0;
     {
@@ -519,13 +564,30 @@ void render_frame(const float view[16], const float proj[16],
          * even at warp distances (far beyond the 2000 AU far plane).          */
         const float DOT_CLAMP_DIST = 1500.0f;
 
+        /* Sphere-approach fade constants */
+        const float SPHERE_FADE_START = 0.75f;   /* px: fade begins       */
+        const float SPHERE_FADE_END   = 1.25f;   /* px: sphere appears    */
+        const float SPHERE_FADE_MIN   = 0.2f;    /* alpha floor at end    */
+
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
             if (!dot_vis[i]) continue;
             Body *b = &g_bodies[i];
-            /* Star is always full brightness; other bodies fade to black */
+
+            /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
             if (f <= 0.0f) continue;   /* skip invisible non-star dots */
+
+            /* Sphere-approach fade: dot dims as body grows toward sphere threshold */
+            float px_i = body_px[i];
+            if (px_i > SPHERE_FADE_START) {
+                float t = (px_i - SPHERE_FADE_START) / (SPHERE_FADE_END - SPHERE_FADE_START);
+                if (t > 1.0f) t = 1.0f;
+                float sfade = 1.0f - (1.0f - SPHERE_FADE_MIN) * t;
+                f *= sfade;
+            }
+            if (f <= 0.0f) continue;
+
             float bx = (float)(b->pos[0] * RS - cx);
             float by = (float)(b->pos[1] * RS - cy);
             float bz = (float)(b->pos[2] * RS - cz);
@@ -562,8 +624,7 @@ void render_frame(const float view[16], const float proj[16],
 
     /* ------------------------------------------------------------------ 4. Rings + Asteroid belts */
     rings_render(vp);
-    asteroids_render(vp_camrel,
-                     (float)g_cam.pos[0], (float)g_cam.pos[1], (float)g_cam.pos[2]);
+    asteroids_render(vp_camrel);
 
     /* ------------------------------------------------------------------ 5. Trails */
     trails_render(vp_camrel);
@@ -628,7 +689,7 @@ void render_frame(const float view[16], const float proj[16],
     }
 
     /* ------------------------------------------------------------------ 7. Labels */
-    labels_render(view, proj, vp_camrel, info, dt);
+    labels_render(view_rot, proj, vp_camrel, info, dt);
 }
 
 /* ------------------------------------------------------------------ shutdown */

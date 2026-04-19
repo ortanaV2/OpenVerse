@@ -291,16 +291,16 @@ void asteroids_step(double dt) {
 }
 
 static void render_belt(Belt *b, const float vp[16],
-                        float cam_x, float cam_y, float cam_z)
+                        double cam_x, double cam_y, double cam_z)
 {
     if (!b->initialized || !s_upload_buf) return;
 
     /* Build upload buffer: camera-relative positions */
     for (int i = 0; i < b->n; i++) {
         float *d = s_upload_buf + i*PFP;
-        d[0] = (float)(b->p[i].pos[0] * RS) - cam_x;
-        d[1] = (float)(b->p[i].pos[1] * RS) - cam_y;
-        d[2] = (float)(b->p[i].pos[2] * RS) - cam_z;
+        d[0] = (float)(b->p[i].pos[0] * RS - cam_x);
+        d[1] = (float)(b->p[i].pos[1] * RS - cam_y);
+        d[2] = (float)(b->p[i].pos[2] * RS - cam_z);
         d[3] = b->p[i].bright;
     }
 
@@ -326,9 +326,12 @@ static void render_belt(Belt *b, const float vp[16],
     glBindVertexArray(0);
 }
 
-void asteroids_render(const float vp_camrel[16],
-                      float cam_x, float cam_y, float cam_z)
+void asteroids_render(const float vp_camrel[16])
 {
+    double cam_x = g_cam.pos[0];
+    double cam_y = g_cam.pos[1];
+    double cam_z = g_cam.pos[2];
+
     for (int b = 0; b < s_n_belts; b++)
         render_belt(&s_belts[b], vp_camrel, cam_x, cam_y, cam_z);
 }
