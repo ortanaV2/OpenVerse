@@ -108,6 +108,58 @@ static float visual_radius(int i, float dcam) {
     return (float)(g_bodies[i].radius * RS);
 }
 
+static double smoothstepd(double edge0, double edge1, double x) {
+    double t = (x - edge0) / (edge1 - edge0);
+    if (t < 0.0) t = 0.0;
+    if (t > 1.0) t = 1.0;
+    return t * t * (3.0 - 2.0 * t);
+}
+
+static float body_point_star_glare_visibility(int body_idx) {
+    Body *b = &g_bodies[body_idx];
+
+    double bx = b->pos[0] * RS - g_cam.pos[0];
+    double by = b->pos[1] * RS - g_cam.pos[1];
+    double bz = b->pos[2] * RS - g_cam.pos[2];
+    double bd2 = bx*bx + by*by + bz*bz;
+    if (bd2 <= 1e-18) return 0;
+
+    double bd = sqrt(bd2);
+    double ux = bx / bd;
+    double uy = by / bd;
+    double uz = bz / bd;
+    double visibility = 1.0;
+
+    for (int i = 0; i < g_nbodies; i++) {
+        if (i == body_idx) continue;
+        Body *s = &g_bodies[i];
+        if (!s->is_star) continue;
+
+        double sx = s->pos[0] * RS - g_cam.pos[0];
+        double sy = s->pos[1] * RS - g_cam.pos[1];
+        double sz = s->pos[2] * RS - g_cam.pos[2];
+        double along = sx*ux + sy*uy + sz*uz;
+        if (along <= 0.0 || along >= bd) continue;
+
+        double sd2 = sx*sx + sy*sy + sz*sz;
+        double perp2 = sd2 - along*along;
+        double sr = s->radius * RS;
+        double r_units = sqrt(perp2 < 0.0 ? 0.0 : perp2) / sr;
+        if (r_units <= 1.0) return 0.0f;
+
+        /* Match star_glare.frag's falloff so dots fade like trails under the
+         * additive glow instead of vanishing at an arbitrary outer radius. */
+        double r_safe = r_units > 0.05 ? r_units : 0.05;
+        double shine = 2.1 * exp(-r_safe * 0.48);
+        double outer_fade = 1.0 - smoothstepd(6.0, 15.0, r_units);
+        double glare = shine * outer_fade;
+        double star_vis = 1.0 - smoothstepd(0.04, 0.38, glare);
+        if (star_vis < visibility) visibility = star_vis;
+    }
+
+    return (float)visibility;
+}
+
 /* ------------------------------------------------------------------ init */
 void render_init(void) {
     /* Prevent near-plane clipping of close billboard geometry.
@@ -487,6 +539,7 @@ void render_frame(const float view[16], const float proj[16],
 
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
+            if (body_point_star_glare_visibility(i) <= 0.02f) continue;
             if (!info[i].show) continue;   /* rendered as full sphere — no dot */
             Body *bi = &g_bodies[i];
 
@@ -577,6 +630,7 @@ void render_frame(const float view[16], const float proj[16],
 
             /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
+            f *= body_point_star_glare_visibility(i);
             if (f <= 0.0f) continue;   /* skip invisible non-star dots */
 
             /* Sphere-approach fade: dot dims as body grows toward sphere threshold */

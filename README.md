@@ -34,9 +34,11 @@ Space is incomprehensibly large. Most simulations either abstract that away or c
 | Main Belt & Kuiper Belt — gravity-integrated particles | ✓ |
 | Orbital trails | ✓ |
 | Logarithmic depth buffer (cm → light-years in one scene) | ✓ |
-| Multiple star systems | planned |
+| Multiple star systems | ✓ |
+| Nearby exoplanet systems | ✓ |
+| Data-driven universe config | ✓ |
+| Variable warp travel | ✓ |
 | Black holes | planned |
-| Data-driven universe config | planned |
 
 ---
 
@@ -68,10 +70,11 @@ make
 | A / D | Strafe left / right |
 | Q / E | Move down / up |
 | Mouse | Look around |
-| Scroll | Camera speed |
+| Scroll | Camera speed / warp speed |
+| T | Toggle warp mode |
 | `+` / `-` | Simulation speed up / down |
 | Space | Pause / resume |
-| R | Reset camera |
+| R | Reset camera near the Sun, looking at the Sun |
 
 **Simulation speeds:** `0 → 0.1 → 0.25 → 0.5 → 1 → 2 → 5 → 10 → 30 → 60 → 100 → 365 → 730 → 1825 → 3650` days/s
 
