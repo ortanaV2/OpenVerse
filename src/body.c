@@ -15,6 +15,7 @@
  *   GL Z  =  ecliptic Y   (90° east → "depth")
  */
 #include "body.h"
+#include "camera.h"
 #include <math.h>
 
 Body *g_bodies     = NULL;
@@ -45,6 +46,7 @@ static double solve_kepler(double M, double e)
 void keplerian_to_state(
         double a, double e, double i_deg,
         double Omega_deg, double omega_tilde_deg, double L_deg,
+        double gm_au_day2,
         double pos_m[3], double vel_ms[3])
 {
     const double deg = PI / 180.0;
@@ -63,11 +65,11 @@ void keplerian_to_state(
                              sqrt(1.0 - e) * cos(E * 0.5));
     double r  = a * (1.0 - e * cos(E));
 
-    double h    = sqrt(GM_SUN * a * (1.0 - e * e));
+    double h    = sqrt(gm_au_day2 * a * (1.0 - e * e));
     double x_p  = r * cos(nu);
     double y_p  = r * sin(nu);
-    double vx_p = -(GM_SUN / h) * sin(nu);
-    double vy_p =  (GM_SUN / h) * (e + cos(nu));
+    double vx_p = -(gm_au_day2 / h) * sin(nu);
+    double vy_p =  (gm_au_day2 / h) * (e + cos(nu));
 
     double cO=cos(Omega), sO=sin(Omega);
     double co=cos(omega), so=sin(omega);
@@ -146,4 +148,25 @@ void moon_to_state(
     pos_m[2] = ey;   vel_ms[2] = evy;
 }
 
+/* ------------------------------------------------------------------ helpers */
 
+/*
+ * nearest_star_idx — index of the star body closest to the camera.
+ * Iterates only over is_star==1 bodies (currently 3).
+ * Camera position is in AU; body positions are in metres → multiply by RS.
+ */
+int nearest_star_idx(void)
+{
+    int best = 0;
+    double best_d2 = 1e300;
+    int i;
+    for (i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].is_star) continue;
+        double dx = g_cam.pos[0] - g_bodies[i].pos[0] * RS;
+        double dy = g_cam.pos[1] - g_bodies[i].pos[1] * RS;
+        double dz = g_cam.pos[2] - g_bodies[i].pos[2] * RS;
+        double d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 < best_d2) { best_d2 = d2; best = i; }
+    }
+    return best;
+}

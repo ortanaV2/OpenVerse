@@ -22,8 +22,26 @@ double g_sim_speed = DAY;
 int    g_paused    = 0;
 
 /* ── helpers ─────────────────────────────────────────────────────────── */
+/* A body is a satellite (moon) if it has a parent and that parent is not a star.
+ * Stars   (parent=-1)          → false  — primary body
+ * Planets (parent=star_idx)    → false  — primary body, fast forces not used
+ * Moons   (parent=planet_idx)  → true   — handled by fast forces */
 static int is_satellite(int i) {
-    return g_bodies[i].parent > 0;
+    return g_bodies[i].parent >= 0 && !g_bodies[g_bodies[i].parent].is_star;
+}
+
+/* Any explicit parent-child pair is integrated at the inner cadence. */
+static int has_fast_parent(int i) {
+    return g_bodies[i].parent >= 0;
+}
+
+static int is_ancestor_of(int ancestor, int child) {
+    int p = g_bodies[child].parent;
+    while (p >= 0) {
+        if (p == ancestor) return 1;
+        p = g_bodies[p].parent;
+    }
+    return 0;
 }
 
 /* ── slow forces: primary-primary + non-parent tidal on satellites ───── */
@@ -37,13 +55,15 @@ static void compute_acc_slow(void) {
             /* skip satellite-satellite (negligible and expensive) */
             if (is_satellite(i) && is_satellite(j)) continue;
             /* skip parent-satellite pair — handled by fast forces */
-            if (is_satellite(j) && g_bodies[j].parent == i) continue;
-            if (is_satellite(i) && g_bodies[i].parent == j) continue;
+            if (is_ancestor_of(i, j) || is_ancestor_of(j, i)) continue;
 
             double dx = g_bodies[j].pos[0] - g_bodies[i].pos[0];
             double dy = g_bodies[j].pos[1] - g_bodies[i].pos[1];
             double dz = g_bodies[j].pos[2] - g_bodies[i].pos[2];
             double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
+            /* Skip negligible cross-system pairs (e.g. Sol's gravity on Alpha Cen planets) */
+            if (G_CONST * g_bodies[j].mass / r2 < GRAV_EPSILON &&
+                G_CONST * g_bodies[i].mass / r2 < GRAV_EPSILON) continue;
             double r  = sqrt(r2);
             double f  = G_CONST / (r2 * r);
 
@@ -68,25 +88,26 @@ static void compute_acc_fast(void) {
         g_bodies[i].fast_acc[2] = 0.0;
 
     for (i = 0; i < g_nbodies; i++) {
-        if (!is_satellite(i)) continue;
-        int p = g_bodies[i].parent;
-
-        double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
-        double dy = g_bodies[p].pos[1] - g_bodies[i].pos[1];
-        double dz = g_bodies[p].pos[2] - g_bodies[i].pos[2];
-        double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
-        double r  = sqrt(r2);
-        double f  = G_CONST / (r2 * r);
+        if (!has_fast_parent(i)) continue;
+        for (int p = g_bodies[i].parent; p >= 0; p = g_bodies[p].parent) {
+            double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
+            double dy = g_bodies[p].pos[1] - g_bodies[i].pos[1];
+            double dz = g_bodies[p].pos[2] - g_bodies[i].pos[2];
+            double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
+            if (G_CONST * g_bodies[p].mass / r2 < GRAV_EPSILON) continue;
+            double r  = sqrt(r2);
+            double f  = G_CONST / (r2 * r);
 
         /* satellite accelerated toward parent */
-        g_bodies[i].fast_acc[0] = f * g_bodies[p].mass * dx;
-        g_bodies[i].fast_acc[1] = f * g_bodies[p].mass * dy;
-        g_bodies[i].fast_acc[2] = f * g_bodies[p].mass * dz;
+            g_bodies[i].fast_acc[0] += f * g_bodies[p].mass * dx;
+            g_bodies[i].fast_acc[1] += f * g_bodies[p].mass * dy;
+            g_bodies[i].fast_acc[2] += f * g_bodies[p].mass * dz;
 
         /* reaction on parent (Newton 3rd — small but correct) */
-        g_bodies[p].fast_acc[0] -= f * g_bodies[i].mass * dx;
-        g_bodies[p].fast_acc[1] -= f * g_bodies[i].mass * dy;
-        g_bodies[p].fast_acc[2] -= f * g_bodies[i].mass * dz;
+            g_bodies[p].fast_acc[0] -= f * g_bodies[i].mass * dx;
+            g_bodies[p].fast_acc[1] -= f * g_bodies[i].mass * dy;
+            g_bodies[p].fast_acc[2] -= f * g_bodies[i].mass * dz;
+        }
     }
 }
 

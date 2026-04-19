@@ -14,7 +14,8 @@ typedef struct {
     double fast_acc[3];    /* m/s^2 dominant parent force, RESPA inner step */
     float  col[3];         /* RGB display colour              */
     int    is_star;
-    int    parent;         /* index of parent body (-1 = none) */
+    int    parent;         /* index of parent body (-1 = none)                  */
+                           /* stars: -1; planets: star idx; moons: planet idx   */
 
     /* Rotation */
     double obliquity;       /* axial tilt in degrees (from ecliptic north)  */
@@ -42,11 +43,16 @@ extern Body *g_bodies;
 extern int   g_nbodies;
 extern int   g_bodies_cap;
 
-/* Heliocentric state from JPL planet elements (angles in degrees, a in AU). */
+/* State from Keplerian elements around a star of given GM (angles in degrees,
+ * a in AU, gm_au_day2 in AU³/day² — use GM_SUN for Sol planets). */
 void keplerian_to_state(
         double a, double e, double i_deg,
         double Omega_deg, double omega_tilde_deg, double L_deg,
+        double gm_au_day2,
         double pos_m[3], double vel_ms[3]);
+
+/* Index of the star body nearest to the camera (camera.h must be included first). */
+int nearest_star_idx(void);
 
 /* Planetocentric state from simple moon elements (a in km, angles in degrees). */
 void moon_to_state(

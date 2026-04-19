@@ -52,6 +52,14 @@ static const double SPEED_TABLE[] = {
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */
 
+/* Warp mode (T key) — variable interstellar speed, adjustable via scroll wheel.
+ * The speed range shifts from the normal [0.00001, 200] AU/s to the warp
+ * range [200, 63241] AU/s (= [0.0032 ly/s, 1 ly/s]).                        */
+#define WARP_SPEED_MIN_AU    200.0f   /* AU/s — lowest warp speed  (normal max) */
+#define WARP_SPEED_MAX_AU  63241.0f   /* AU/s — highest warp speed (1 ly/s)     */
+int s_warp = 0;            /* 0 = normal, 1 = warp engaged */
+int g_warp = 0;            /* public mirror of s_warp for UI/other modules */
+
 
 /* ------------------------------------------------------------------ init / quit */
 static int app_init(void) {
@@ -135,6 +143,22 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_q: s_key_q = 1; break;
         case SDLK_e: s_key_e = 1; break;
         case SDLK_r: cam_reset(); break;
+        case SDLK_t:
+            s_warp = !s_warp;
+            g_warp = s_warp;
+            if (s_warp) {
+                /* Entering warp: clamp speed into the warp range */
+                if (g_cam.speed < WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
+                if (g_cam.speed > WARP_SPEED_MAX_AU) g_cam.speed = WARP_SPEED_MAX_AU;
+            } else {
+                /* Leaving warp: clamp back to normal range */
+                if (g_cam.speed > WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
+            }
+            fprintf(stdout, "[Cam] warp %s (%.0f AU/s = %.4f ly/s)\n",
+                    s_warp ? "ON" : "OFF",
+                    (double)g_cam.speed,
+                    (double)(g_cam.speed / WARP_SPEED_MAX_AU));
+            break;
         case SDLK_SPACE: g_paused = !g_paused; break;
         case SDLK_ESCAPE:
             if (s_freelook) {
@@ -189,8 +213,14 @@ static void handle_event(const SDL_Event *e, float dt) {
 
     case SDL_MOUSEWHEEL:
         g_cam.speed *= (e->wheel.y > 0) ? 1.3f : (1.0f / 1.3f);
-        if (g_cam.speed < 0.00001f) g_cam.speed = 0.00001f;
-        if (g_cam.speed > 200.0f)   g_cam.speed = 200.0f;
+        if (s_warp) {
+            /* Warp range: 200 AU/s (0.003 ly/s) … 63 241 AU/s (1 ly/s) */
+            if (g_cam.speed < WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
+            if (g_cam.speed > WARP_SPEED_MAX_AU) g_cam.speed = WARP_SPEED_MAX_AU;
+        } else {
+            if (g_cam.speed < 0.00001f)          g_cam.speed = 0.00001f;
+            if (g_cam.speed > WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
+        }
         break;
 
     default:
@@ -210,7 +240,9 @@ static void camera_move(float dt) {
     if (rlen > 1e-6f) { rx /= rlen; rz /= rlen; }
 
     /* Compute delta in double so that pos (double) += tiny_delta never loses
-     * the increment due to float32 ULP at large orbital distances.          */
+     * the increment due to float32 ULP at large orbital distances.
+     * Both normal and warp modes use g_cam.speed directly; the scroll wheel
+     * and T-key clamp it to the appropriate range. */
     double dspd = (double)g_cam.speed * (double)dt;
 
     if (s_key_w) { g_cam.pos[0] += (double)fdx*dspd; g_cam.pos[1] += (double)fdy*dspd; g_cam.pos[2] += (double)fdz*dspd; }
@@ -328,11 +360,31 @@ int main(int argc, char **argv) {
         float fdx, fdy, fdz;
         cam_get_dir(&fdx, &fdy, &fdz);
 
+        float up[3] = { 0.0f, 1.0f, 0.0f };
+
+        /* Rotation-only view matrix built with a ZERO origin.
+         *
+         * The naive approach (eye = (float)g_cam.pos, ctr = eye + dir) suffers
+         * catastrophic cancellation at interstellar distances: at Barnard's Star
+         * eye[1] ≈ −365 000 AU and the float32 ULP is 0.031 AU, larger than the
+         * small direction component fdy = sin(1°) = 0.017.  The addition
+         * fl32(−365 000 + 0.017) rounds back to −365 000, so (ctr − eye).y = 0
+         * for several mouse pixels, then jumps a full ULP → stepwise rotation
+         * jitter in ALL axes wherever the camera offset is large.
+         *
+         * Fix: use eye = [0,0,0] so the forward vector is computed directly from
+         * [fdx, fdy, fdz] without any large-offset subtraction.  All body
+         * rendering is already camera-relative (body_pos − g_cam.pos in double),
+         * so no translation term is needed in this VP matrix anyway. */
+        float dir[3]  = { fdx, fdy, fdz };
+        float zero3[3] = { 0.0f, 0.0f, 0.0f };
+        mat4_lookAt(view_rot, zero3, dir, up);
+
+        /* Full view matrix with float eye — kept for ring rendering.
+         * Rings are always near Sol so float32 is accurate enough there. */
         float eye[3] = { (float)g_cam.pos[0], (float)g_cam.pos[1], (float)g_cam.pos[2] };
         float ctr[3] = { eye[0]+fdx,          eye[1]+fdy,          eye[2]+fdz          };
-        float up[3]  = { 0.0f, 1.0f, 0.0f };
         mat4_lookAt(view, eye, ctr, up);
-        mat4_strip_translation(view_rot, view);
 
         /* Render */
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);

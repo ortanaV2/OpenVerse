@@ -23,8 +23,9 @@
 #define FONT_SIZE     12
 
 /* Camera speed range (AU / real-second) */
-#define CAM_MIN  0.00001f
-#define CAM_MAX  200.0f
+#define CAM_MIN       0.00001f
+#define CAM_MAX       200.0f       /* normal max = warp min */
+#define WARP_MAX  63241.0f         /* 1 ly/s */
 
 /* ------------------------------------------------------------------ GL */
 static GLuint s_shader     = 0;
@@ -161,20 +162,33 @@ void ui_render(void) {
     const float W  = (float)WIN_W;
     const float TH = (float)FONT_SIZE;
 
-    /* Log-normalised camera speed → fill fraction */
+    /* Log-normalised camera speed → fill fraction.
+     * In warp mode the bar uses the warp range [CAM_MAX, WARP_MAX]. */
     float spd = g_cam.speed;
-    if (spd < CAM_MIN) spd = CAM_MIN;
-    if (spd > CAM_MAX) spd = CAM_MAX;
-    float t = logf(spd / CAM_MIN) / logf(CAM_MAX / CAM_MIN);
+    float t;
+    if (g_warp) {
+        float ws = spd;
+        if (ws < CAM_MAX)  ws = CAM_MAX;
+        if (ws > WARP_MAX) ws = WARP_MAX;
+        t = logf(ws / CAM_MAX) / logf(WARP_MAX / CAM_MAX);
+    } else {
+        if (spd < CAM_MIN) spd = CAM_MIN;
+        if (spd > CAM_MAX) spd = CAM_MAX;
+        t = logf(spd / CAM_MIN) / logf(CAM_MAX / CAM_MIN);
+    }
 
-    /* Format movement speed string */
+    /* Format movement speed string — show WARP indicator when T is held */
     char mv_str[64];
-    if (spd < 0.001f)
+    if (g_warp) {
+        double ly_s = (double)g_cam.speed / (double)WARP_MAX;
+        snprintf(mv_str, sizeof(mv_str), "WARP  %.4f ly/s", ly_s);
+    } else if (spd < 0.001f) {
         snprintf(mv_str, sizeof(mv_str), "%.5f AU/s", (double)spd);
-    else if (spd < 1.0f)
+    } else if (spd < 1.0f) {
         snprintf(mv_str, sizeof(mv_str), "%.3f AU/s", (double)spd);
-    else
+    } else {
         snprintf(mv_str, sizeof(mv_str), "%.2f AU/s", (double)spd);
+    }
 
     /* Format sim speed string */
     char ss_str[64];

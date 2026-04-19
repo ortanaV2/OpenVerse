@@ -35,6 +35,7 @@
 #define G_CONST    6.674e-11         /* m^3 kg^-1 s^-2                   */
 #define GM_SUN     2.9591220828559093e-4  /* AU^3/day^2                 */
 #define SOFTENING  1e5               /* collision softening radius (m)   */
+#define GRAV_EPSILON 1e-14           /* m/s² — skip pair if acceleration below this */
 
 /* ------------------------------------------------------------------ sim */
 #define MAX_BODIES         128
@@ -43,3 +44,12 @@
 
 /* 1 AU → 1.0 GL unit */
 #define RS  (1.0 / AU)
+
+#define LY  9.461e15   /* meters per light-year */
+
+/* ------------------------------------------------------------------ system LOD (AU)
+ * Distances at which rendering elements fade when flying away from the system. */
+#define SYS_TRAIL_FADE_START  240.0f   /* trails at full opacity below this */
+#define SYS_TRAIL_FADE_END   1200.0f   /* trails fully invisible above this */
+#define SYS_DOT_FADE_START    240.0f   /* non-star dots begin fading        */
+#define SYS_DOT_FADE_END     1200.0f   /* non-star dots fully gone          */

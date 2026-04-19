@@ -1,28 +1,41 @@
 /*
- * universe.c — data-driven universe loader
+ * universe.c — flat-bodies universe loader
  *
- * Reads a universe.json file and populates g_bodies[] / g_nbodies.
- * The JSON must have the structure:
+ * JSON schema (top-level keys):
  *
- *   {
- *     "systems": [
- *       {
- *         "name": "Sol",
- *         "bodies": [ { ... }, ... ]
- *       }
- *     ]
- *   }
+ *   "bodies"         — flat array of all bodies (stars, planets, moons)
+ *   "rings"          — ring-system descriptors (unchanged)
+ *   "asteroid_belts" — belt descriptors (unchanged)
  *
- * Body types: "star", "planet", "dwarf_planet", "moon"
+ * Body placement rules by "type":
  *
- * Orbital elements:
- *   planets / dwarf_planets: "keplerian" { a, e, i, Omega, omega_tilde, L }
- *   moons:                   "moon_keplerian" { a_km, e, i_deg, Omega_deg, omega_deg, M0_deg }
- *   stars:                   no orbital elements — pos/vel = {0,0,0}
+ *   "star"                       — placed at absolute position given by
+ *                                  "pos_ly" (light-years from origin).
+ *                                  Optional "velocity_km_s" sets bulk
+ *                                  proper-motion velocity for the whole system.
  *
- * After all bodies are loaded:
- *   - Trail intervals are computed from orbital periods.
- *   - Centre-of-mass correction is applied to the star's velocity.
+ *   "planet" / "dwarf_planet"    — Keplerian orbit around "parent" star.
+ *                                  "parent" must name a star already loaded.
+ *
+ *   "moon"                       — parent-relative orbit around "parent"
+ *                                  planet/moon using "moon_keplerian" elements.
+ *
+ * Three-pass load order:
+ *   Pass 1 — stars          (need absolute positions before anything else)
+ *   Pass 2 — planets / dwarf_planets
+ *   Pass 3 — moons
+ *
+ * Post-processing per star (after all bodies loaded):
+ *   1. Centre-of-mass velocity correction (zero internal momentum)
+ *   2. Apply bulk velocity to all bodies in system
+ *
+ * Parent chain convention (Body.parent field):
+ *   stars        — parent = -1
+ *   planets      — parent = star body index
+ *   moons        — parent = planet body index
+ *
+ * The root_star_of() helper walks this chain to find the owning star,
+ * which is used for per-system post-processing and physics grouping.
  */
 #include "universe.h"
 #include "body.h"
@@ -35,10 +48,6 @@
 
 /* ------------------------------------------------------------------ helpers */
 
-/*
- * ensure_capacity — grow g_bodies if needed to hold at least `needed` bodies.
- * Uses doubling strategy; initial allocation is MAX_BODIES.
- */
 static void ensure_capacity(int needed)
 {
     if (needed <= g_bodies_cap) return;
@@ -50,35 +59,23 @@ static void ensure_capacity(int needed)
     g_bodies_cap = new_cap;
 }
 
-/*
- * alloc_trail — allocate the trail buffer for a newly added body.
- */
 static void alloc_trail(Body *bo)
 {
-    bo->trail      = (double(*)[3])calloc(TRAIL_LEN, 3 * sizeof(double));
+    bo->trail = (double(*)[3])calloc(TRAIL_LEN, 3 * sizeof(double));
     if (!bo->trail) { fprintf(stderr, "[universe] trail alloc failed\n"); exit(1); }
     bo->trail_head  = 0;
     bo->trail_count = 0;
     bo->trail_accum = 0.0;
 }
 
-/*
- * find_body_index — search g_bodies[0..n-1] for body with given name.
- * Returns -1 if not found.
- */
 static int find_body_index(const char *name, int n)
 {
     int i;
-    for (i = 0; i < n; i++) {
+    for (i = 0; i < n; i++)
         if (strcmp(g_bodies[i].name, name) == 0) return i;
-    }
     return -1;
 }
 
-/*
- * read_color — read a [r, g, b] JSON array into a float[3].
- * Falls back to {0,0,0} if node is NULL or wrong type.
- */
 static void read_color(const JsonNode *arr, float col[3])
 {
     col[0] = (float)json_num(json_idx(arr, 0), 0.0);
@@ -86,288 +83,313 @@ static void read_color(const JsonNode *arr, float col[3])
     col[2] = (float)json_num(json_idx(arr, 2), 0.0);
 }
 
+static void body_defaults(Body *bo)
+{
+    memset(bo, 0, sizeof(*bo));
+    bo->parent    = -1;
+    bo->atm_scale = 1.0f;
+}
+
+static void read_rotation(const JsonNode *bn, Body *bo)
+{
+    JsonNode *obl = json_get(bn, "obliquity_deg");
+    JsonNode *rot = json_get(bn, "rotation_period_days");
+    if (obl) bo->obliquity = json_num(obl, 0.0);
+    if (rot && json_num(rot, 0.0) != 0.0)
+        bo->rotation_rate = (2.0 * PI) / (json_num(rot, 1.0) * DAY);
+}
+
+static void read_atmosphere(const JsonNode *bn, Body *bo)
+{
+    JsonNode *atm = json_get(bn, "atmosphere");
+    if (!atm) return;
+    float ac[3]; read_color(json_get(atm, "color"), ac);
+    bo->atm_color[0]  = ac[0];
+    bo->atm_color[1]  = ac[1];
+    bo->atm_color[2]  = ac[2];
+    bo->atm_intensity = (float)json_num(json_get(atm, "intensity"), 0.0);
+    bo->atm_scale     = (float)json_num(json_get(atm, "scale"),     1.0);
+}
+
+/*
+ * root_star_of — walk the parent chain to find the owning star.
+ *   Stars (parent=-1) return themselves immediately.
+ *   Planets (parent=star) return the star in one hop.
+ *   Moons  (parent=planet, parent=star) return the star in two hops.
+ */
+static int root_star_of(int i)
+{
+    while (g_bodies[i].parent >= 0)
+        i = g_bodies[i].parent;
+    return i;
+}
+
 /* ------------------------------------------------------------------ public */
 
 void universe_load(const char *path)
 {
+    int i, s;
     JsonNode *root = json_parse_file(path);
     if (!root) {
         fprintf(stderr, "[universe] failed to open or parse '%s'\n", path);
         exit(1);
     }
 
-    JsonNode *systems = json_get(root, "systems");
-    if (!systems || systems->type != JSON_ARRAY) {
-        fprintf(stderr, "[universe] 'systems' array not found in '%s'\n", path);
-        json_free(root);
-        exit(1);
-    }
-
-    /* Use the first system */
-    JsonNode *system = systems->first_child;
-    if (!system) {
-        fprintf(stderr, "[universe] no systems defined in '%s'\n", path);
-        json_free(root);
-        exit(1);
-    }
-
-    JsonNode *bodies_arr = json_get(system, "bodies");
+    JsonNode *bodies_arr = json_get(root, "bodies");
     if (!bodies_arr || bodies_arr->type != JSON_ARRAY) {
-        fprintf(stderr, "[universe] 'bodies' array not found in system\n");
-        json_free(root);
-        exit(1);
+        fprintf(stderr, "[universe] 'bodies' array not found in '%s'\n", path);
+        json_free(root); exit(1);
     }
 
     g_nbodies = 0;
 
-    /* ----------------------------------------------------------------
-     * First pass: create all bodies.
-     * Moons need their parent to already exist in g_bodies, so we
-     * process stars first, then planets/dwarf_planets, then moons.
-     * Since the JSON is ordered (stars before planets before moons)
-     * a single forward pass works fine — but we explicitly sort by
-     * type priority to be safe.
-     *
-     * Priority: star(0) -> planet(1) -> dwarf_planet(2) -> moon(3)
-     * ---------------------------------------------------------------- */
+    /* Bulk velocity per body slot (set for stars during Pass 1, zero otherwise) */
+    double bv[MAX_BODIES][3];
+    for (i = 0; i < MAX_BODIES; i++) bv[i][0] = bv[i][1] = bv[i][2] = 0.0;
 
-    /* We do two passes: non-moons first, then moons. */
-
-    /* Pass 1 — stars, planets, dwarf_planets */
+    /* ================================================================
+     * Pass 1 — Stars
+     * Placed at their absolute position (pos_ly → metres).
+     * Bulk velocity stashed in bv[]; applied in post-processing.
+     * ================================================================ */
     {
-        JsonNode *bnode = bodies_arr->first_child;
-        while (bnode) {
-            const char *type = json_str(json_get(bnode, "type"), "");
+        JsonNode *bn;
+        for (bn = bodies_arr->first_child; bn; bn = bn->next) {
+            const char *type = json_str(json_get(bn, "type"), "");
+            if (strcmp(type, "star") != 0) continue;
 
-            int is_moon = (strcmp(type, "moon") == 0);
-            if (!is_moon) {
-                const char *name  = json_str(json_get(bnode, "name"), "unknown");
-                double      mass  = json_num(json_get(bnode, "mass"), 0.0);
-                double      rad_km = json_num(json_get(bnode, "radius_km"), 1.0);
-                float       col[3];
-                read_color(json_get(bnode, "color"), col);
+            const char *name   = json_str(json_get(bn, "name"),      "unknown");
+            double      mass   = json_num(json_get(bn, "mass"),       0.0);
+            double      rad_km = json_num(json_get(bn, "radius_km"),  1.0);
+            float       col[3];
+            read_color(json_get(bn, "color"), col);
 
-                int is_star = (strcmp(type, "star") == 0);
-
-                double p[3] = {0.0, 0.0, 0.0};
-                double v[3] = {0.0, 0.0, 0.0};
-
-                if (!is_star) {
-                    /* planet or dwarf_planet — use keplerian elements */
-                    JsonNode *kep = json_get(bnode, "keplerian");
-                    if (kep) {
-                        double a            = json_num(json_get(kep, "a"),            1.0);
-                        double e            = json_num(json_get(kep, "e"),            0.0);
-                        double i_deg        = json_num(json_get(kep, "i"),            0.0);
-                        double Omega_deg    = json_num(json_get(kep, "Omega"),        0.0);
-                        double omega_tilde  = json_num(json_get(kep, "omega_tilde"),  0.0);
-                        double L            = json_num(json_get(kep, "L"),            0.0);
-                        keplerian_to_state(a, e, i_deg, Omega_deg, omega_tilde, L, p, v);
-                    }
-                }
-
-                /* add to g_bodies */
-                {
-                    ensure_capacity(g_nbodies + 1);
-                    Body *bo = &g_bodies[g_nbodies++];
-                    strncpy(bo->name, name, 31);
-                    bo->name[31] = '\0';
-                    bo->mass            = mass;
-                    bo->radius          = rad_km * 1000.0;
-                    bo->pos[0] = p[0]; bo->pos[1] = p[1]; bo->pos[2] = p[2];
-                    bo->vel[0] = v[0]; bo->vel[1] = v[1]; bo->vel[2] = v[2];
-                    bo->acc[0] = bo->acc[1] = bo->acc[2] = 0.0;
-                    bo->fast_acc[0] = bo->fast_acc[1] = bo->fast_acc[2] = 0.0;
-                    bo->col[0] = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
-                    bo->is_star         = is_star;
-                    bo->parent          = -1;
-                    bo->obliquity       = 0.0;
-                    bo->rotation_rate   = 0.0;
-                    bo->rotation_angle  = 0.0;
-                    bo->trail_interval = DAY;   /* overwritten below for planets */
-                    alloc_trail(bo);
-
-                    /* atmosphere defaults */
-                    bo->atm_color[0] = bo->atm_color[1] = bo->atm_color[2] = 0.0f;
-                    bo->atm_intensity = 0.0f;
-                    bo->atm_scale     = 1.0f;
-
-                    /* obliquity / rotation */
-                    JsonNode *obl = json_get(bnode, "obliquity_deg");
-                    JsonNode *rot = json_get(bnode, "rotation_period_days");
-                    if (obl) bo->obliquity = json_num(obl, 0.0);
-                    if (rot && json_num(rot, 0.0) != 0.0)
-                        bo->rotation_rate = (2.0 * PI) / (json_num(rot, 1.0) * DAY);
-
-                    /* atmosphere */
-                    JsonNode *atm = json_get(bnode, "atmosphere");
-                    if (atm) {
-                        float acol[3];
-                        read_color(json_get(atm, "color"), acol);
-                        bo->atm_color[0] = acol[0];
-                        bo->atm_color[1] = acol[1];
-                        bo->atm_color[2] = acol[2];
-                        bo->atm_intensity = (float)json_num(json_get(atm, "intensity"), 0.0);
-                        bo->atm_scale     = (float)json_num(json_get(atm, "scale"),     1.0);
-                    }
-                }
+            double px = 0.0, py = 0.0, pz = 0.0;
+            JsonNode *ply = json_get(bn, "pos_ly");
+            if (ply) {
+                px = json_num(json_idx(ply, 0), 0.0) * LY;
+                py = json_num(json_idx(ply, 1), 0.0) * LY;
+                pz = json_num(json_idx(ply, 2), 0.0) * LY;
             }
 
-            bnode = bnode->next;
-        }
-    }
+            ensure_capacity(g_nbodies + 1);
+            Body *bo = &g_bodies[g_nbodies];
+            body_defaults(bo);
+            strncpy(bo->name, name, 31); bo->name[31] = '\0';
+            bo->mass           = mass;
+            bo->radius         = rad_km * 1000.0;
+            bo->pos[0]         = px; bo->pos[1] = py; bo->pos[2] = pz;
+            bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
+            bo->is_star        = 1;
+            bo->trail_interval = DAY * 25.0;
+            read_rotation(bn, bo);
 
-    /* Pass 2 — moons */
-    {
-        JsonNode *bnode = bodies_arr->first_child;
-        while (bnode) {
-            const char *type = json_str(json_get(bnode, "type"), "");
-
-            if (strcmp(type, "moon") == 0) {
-                const char *name      = json_str(json_get(bnode, "name"), "unknown");
-                double      mass      = json_num(json_get(bnode, "mass"), 0.0);
-                double      rad_km    = json_num(json_get(bnode, "radius_km"), 1.0);
-                const char *par_name  = json_str(json_get(bnode, "parent"), "");
-                float       col[3];
-                read_color(json_get(bnode, "color"), col);
-
-                int par_idx = find_body_index(par_name, g_nbodies);
-                if (par_idx < 0) {
-                    fprintf(stderr, "[universe] moon '%s': parent '%s' not found\n",
-                            name, par_name);
-                    json_free(root);
-                    exit(1);
-                }
-
-                /* Save parent values now — ensure_capacity below may realloc,
-                 * invalidating any Body* pointer into g_bodies.             */
-                double gm_parent  = G_CONST * g_bodies[par_idx].mass;
-                double par_pos[3] = { g_bodies[par_idx].pos[0],
-                                      g_bodies[par_idx].pos[1],
-                                      g_bodies[par_idx].pos[2] };
-                double par_vel[3] = { g_bodies[par_idx].vel[0],
-                                      g_bodies[par_idx].vel[1],
-                                      g_bodies[par_idx].vel[2] };
-
-                JsonNode *mk = json_get(bnode, "moon_keplerian");
-                double rel_p[3] = {0,0,0}, rel_v[3] = {0,0,0};
-                double a_km = 0.0;
-                if (mk) {
-                    a_km            = json_num(json_get(mk, "a_km"),     0.0);
-                    double e        = json_num(json_get(mk, "e"),         0.0);
-                    double i_deg    = json_num(json_get(mk, "i_deg"),     0.0);
-                    double Omega_deg = json_num(json_get(mk, "Omega_deg"),0.0);
-                    double omega_deg = json_num(json_get(mk, "omega_deg"),0.0);
-                    double M0_deg   = json_num(json_get(mk, "M0_deg"),    0.0);
-                    moon_to_state(a_km, e, i_deg, Omega_deg, omega_deg,
-                                  M0_deg, gm_parent, rel_p, rel_v);
-                }
-
-                double p[3] = { par_pos[0] + rel_p[0],
-                                par_pos[1] + rel_p[1],
-                                par_pos[2] + rel_p[2] };
-                double v[3] = { par_vel[0] + rel_v[0],
-                                par_vel[1] + rel_v[1],
-                                par_vel[2] + rel_v[2] };
-
-                ensure_capacity(g_nbodies + 1);
-                Body *bo = &g_bodies[g_nbodies++];
-                strncpy(bo->name, name, 31);
-                bo->name[31] = '\0';
-                bo->mass            = mass;
-                bo->radius          = rad_km * 1000.0;
-                bo->pos[0] = p[0]; bo->pos[1] = p[1]; bo->pos[2] = p[2];
-                bo->vel[0] = v[0]; bo->vel[1] = v[1]; bo->vel[2] = v[2];
-                bo->acc[0] = bo->acc[1] = bo->acc[2] = 0.0;
-                bo->fast_acc[0] = bo->fast_acc[1] = bo->fast_acc[2] = 0.0;
-                bo->col[0] = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
-                bo->is_star         = 0;
-                bo->parent          = par_idx;
-                bo->obliquity       = 0.0;
-                bo->rotation_rate   = 0.0;
-                bo->rotation_angle  = 0.0;
-                alloc_trail(bo);
-
-                /* atmosphere defaults */
-                bo->atm_color[0] = bo->atm_color[1] = bo->atm_color[2] = 0.0f;
-                bo->atm_intensity = 0.0f;
-                bo->atm_scale     = 1.0f;
-
-                /* Trail interval: T/400, floored at 60 s */
-                {
-                    double a_m = a_km * 1000.0;
-                    double T   = 2.0 * PI * sqrt(a_m * a_m * a_m / gm_parent);
-                    bo->trail_interval = T / 400.0;
-                    if (bo->trail_interval < 60.0) bo->trail_interval = 60.0;
-                }
-
-                /* obliquity / rotation */
-                JsonNode *obl = json_get(bnode, "obliquity_deg");
-                JsonNode *rot = json_get(bnode, "rotation_period_days");
-                if (obl) bo->obliquity = json_num(obl, 0.0);
-                if (rot && json_num(rot, 0.0) != 0.0)
-                    bo->rotation_rate = (2.0 * PI) / (json_num(rot, 1.0) * DAY);
-
-                /* atmosphere */
-                JsonNode *atm = json_get(bnode, "atmosphere");
-                if (atm) {
-                    float acol[3];
-                    read_color(json_get(atm, "color"), acol);
-                    bo->atm_color[0] = acol[0];
-                    bo->atm_color[1] = acol[1];
-                    bo->atm_color[2] = acol[2];
-                    bo->atm_intensity = (float)json_num(json_get(atm, "intensity"), 0.0);
-                    bo->atm_scale     = (float)json_num(json_get(atm, "scale"),     1.0);
-                }
+            /* Stash bulk velocity for post-processing */
+            JsonNode *vn = json_get(bn, "velocity_km_s");
+            if (vn) {
+                bv[g_nbodies][0] = json_num(json_idx(vn, 0), 0.0) * 1000.0;
+                bv[g_nbodies][1] = json_num(json_idx(vn, 1), 0.0) * 1000.0;
+                bv[g_nbodies][2] = json_num(json_idx(vn, 2), 0.0) * 1000.0;
             }
 
-            bnode = bnode->next;
+            alloc_trail(bo);
+            g_nbodies++;
         }
     }
 
-    /* ----------------------------------------------------------------
-     * Trail intervals for planets / dwarf_planets.
-     * Formula: interval = (T_days / 200) * DAY  →  200 samples/orbit.
-     * ---------------------------------------------------------------- */
+    /* ================================================================
+     * Pass 2 — Planets and dwarf_planets
+     * Keplerian orbit around "parent" star.
+     * Body.parent is set to the star's index so root_star_of() works
+     * and the physics engine correctly skips planet–star fast forces.
+     * ================================================================ */
     {
-        JsonNode *bnode = bodies_arr->first_child;
-        while (bnode) {
-            const char *type = json_str(json_get(bnode, "type"), "");
-            int is_planet = (strcmp(type, "planet") == 0 ||
-                             strcmp(type, "dwarf_planet") == 0);
-            if (is_planet) {
-                const char *name = json_str(json_get(bnode, "name"), "");
-                int idx = find_body_index(name, g_nbodies);
-                if (idx >= 0) {
-                    JsonNode *kep = json_get(bnode, "keplerian");
-                    if (kep) {
-                        double a      = json_num(json_get(kep, "a"), 1.0);
-                        double T_days = 2.0 * PI * sqrt(a * a * a / GM_SUN);
-                        g_bodies[idx].trail_interval = (T_days / 400.0) * DAY;
-                    }
-                }
+        JsonNode *bn;
+        for (bn = bodies_arr->first_child; bn; bn = bn->next) {
+            const char *type = json_str(json_get(bn, "type"), "");
+            if (strcmp(type, "planet") != 0 && strcmp(type, "dwarf_planet") != 0)
+                continue;
+
+            const char *name     = json_str(json_get(bn, "name"),      "unknown");
+            double      mass     = json_num(json_get(bn, "mass"),       0.0);
+            double      rad_km   = json_num(json_get(bn, "radius_km"),  1.0);
+            const char *par_name = json_str(json_get(bn, "parent"),     "");
+            float       col[3];
+            read_color(json_get(bn, "color"), col);
+
+            int par_idx = find_body_index(par_name, g_nbodies);
+            if (par_idx < 0) {
+                fprintf(stderr, "[universe] planet '%s': parent '%s' not found\n",
+                        name, par_name);
+                json_free(root); exit(1);
             }
-            bnode = bnode->next;
+
+            /* GM of parent star in AU³/day² — used for both velocity and trail */
+            double gm_star_au2 = G_CONST * g_bodies[par_idx].mass
+                                 / (AU * AU * AU) * (DAY * DAY);
+
+            double p[3] = {0,0,0}, v[3] = {0,0,0};
+            double a = 1.0;
+            JsonNode *kep = json_get(bn, "keplerian");
+            if (kep) {
+                a        = json_num(json_get(kep, "a"),            1.0);
+                double e = json_num(json_get(kep, "e"),            0.0);
+                double ii= json_num(json_get(kep, "i"),            0.0);
+                double O = json_num(json_get(kep, "Omega"),        0.0);
+                double w = json_num(json_get(kep, "omega_tilde"),  0.0);
+                double L = json_num(json_get(kep, "L"),            0.0);
+                keplerian_to_state(a, e, ii, O, w, L, gm_star_au2, p, v);
+            }
+            /* Offset by parent star's world position */
+            p[0] += g_bodies[par_idx].pos[0];
+            p[1] += g_bodies[par_idx].pos[1];
+            p[2] += g_bodies[par_idx].pos[2];
+
+            /* Trail interval: T/400 in sim-seconds */
+            double T_days = 2.0 * PI * sqrt(a * a * a / gm_star_au2);
+            double trail_int   = (T_days / 400.0) * DAY;
+
+            ensure_capacity(g_nbodies + 1);
+            Body *bo = &g_bodies[g_nbodies++];
+            body_defaults(bo);
+            strncpy(bo->name, name, 31); bo->name[31] = '\0';
+            bo->mass           = mass;
+            bo->radius         = rad_km * 1000.0;
+            bo->pos[0]         = p[0]; bo->pos[1] = p[1]; bo->pos[2] = p[2];
+            bo->vel[0]         = v[0]; bo->vel[1] = v[1]; bo->vel[2] = v[2];
+            bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
+            bo->parent         = par_idx;
+            bo->trail_interval = trail_int;
+            read_rotation(bn, bo);
+            read_atmosphere(bn, bo);
+            alloc_trail(bo);
         }
     }
 
-    /* Star: use a slow interval so it barely records */
-    if (g_nbodies > 0 && g_bodies[0].is_star) {
-        g_bodies[0].trail_interval = DAY * 25.0;
-    }
+    /* ================================================================
+     * Pass 3 — Moons
+     * Parent-relative orbit; parent must be a planet already loaded.
+     * ================================================================ */
+    {
+        JsonNode *bn;
+        for (bn = bodies_arr->first_child; bn; bn = bn->next) {
+            const char *type = json_str(json_get(bn, "type"), "");
+            if (strcmp(type, "moon") != 0) continue;
 
-    /* ----------------------------------------------------------------
-     * Centre-of-mass correction:
-     * Adjust the star's velocity so total system momentum = 0.
-     * ---------------------------------------------------------------- */
-    if (g_nbodies > 0 && g_bodies[0].is_star) {
-        int i;
-        for (i = 1; i < g_nbodies; i++) {
-            g_bodies[0].vel[0] -= g_bodies[i].mass * g_bodies[i].vel[0] / g_bodies[0].mass;
-            g_bodies[0].vel[1] -= g_bodies[i].mass * g_bodies[i].vel[1] / g_bodies[0].mass;
-            g_bodies[0].vel[2] -= g_bodies[i].mass * g_bodies[i].vel[2] / g_bodies[0].mass;
+            const char *name     = json_str(json_get(bn, "name"),     "unknown");
+            double      mass     = json_num(json_get(bn, "mass"),      0.0);
+            double      rad_km   = json_num(json_get(bn, "radius_km"), 1.0);
+            const char *par_name = json_str(json_get(bn, "parent"),    "");
+            float       col[3];
+            read_color(json_get(bn, "color"), col);
+
+            int par_idx = find_body_index(par_name, g_nbodies);
+            if (par_idx < 0) {
+                fprintf(stderr, "[universe] moon '%s': parent '%s' not found\n",
+                        name, par_name);
+                json_free(root); exit(1);
+            }
+
+            /* Cache parent state before potential realloc */
+            double gm_par   = G_CONST * g_bodies[par_idx].mass;
+            double par_p[3] = { g_bodies[par_idx].pos[0],
+                                g_bodies[par_idx].pos[1],
+                                g_bodies[par_idx].pos[2] };
+            double par_v[3] = { g_bodies[par_idx].vel[0],
+                                g_bodies[par_idx].vel[1],
+                                g_bodies[par_idx].vel[2] };
+
+            JsonNode *mk = json_get(bn, "moon_keplerian");
+            double rel_p[3] = {0,0,0}, rel_v[3] = {0,0,0};
+            double a_km = 0.0;
+            if (mk) {
+                a_km             = json_num(json_get(mk, "a_km"),      0.0);
+                double e         = json_num(json_get(mk, "e"),          0.0);
+                double i_deg     = json_num(json_get(mk, "i_deg"),      0.0);
+                double Omega_deg = json_num(json_get(mk, "Omega_deg"),  0.0);
+                double omega_deg = json_num(json_get(mk, "omega_deg"),  0.0);
+                double M0_deg    = json_num(json_get(mk, "M0_deg"),     0.0);
+                moon_to_state(a_km, e, i_deg, Omega_deg, omega_deg,
+                              M0_deg, gm_par, rel_p, rel_v);
+            }
+
+            /* Trail interval: T/400, minimum 60 s */
+            double trail_int = DAY;
+            if (a_km > 0.0) {
+                double a_m = a_km * 1000.0;
+                double T   = 2.0 * PI * sqrt(a_m * a_m * a_m / gm_par);
+                trail_int = T / 400.0;
+                if (trail_int < 60.0) trail_int = 60.0;
+            }
+
+            ensure_capacity(g_nbodies + 1);
+            Body *bo = &g_bodies[g_nbodies++];
+            body_defaults(bo);
+            strncpy(bo->name, name, 31); bo->name[31] = '\0';
+            bo->mass           = mass;
+            bo->radius         = rad_km * 1000.0;
+            bo->pos[0]         = par_p[0] + rel_p[0];
+            bo->pos[1]         = par_p[1] + rel_p[1];
+            bo->pos[2]         = par_p[2] + rel_p[2];
+            bo->vel[0]         = par_v[0] + rel_v[0];
+            bo->vel[1]         = par_v[1] + rel_v[1];
+            bo->vel[2]         = par_v[2] + rel_v[2];
+            bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
+            bo->parent         = par_idx;
+            bo->trail_interval = trail_int;
+            read_rotation(bn, bo);
+            read_atmosphere(bn, bo);
+            alloc_trail(bo);
         }
     }
+
+    /* ================================================================
+     * Post-processing — per star:
+     *   1. Centre-of-mass velocity correction (zero internal momentum).
+     *   2. Apply bulk velocity (proper motion) to all bodies in system.
+     * ================================================================ */
+    int n_stars = 0;
+    for (s = 0; s < g_nbodies; s++) {
+        if (!g_bodies[s].is_star) continue;
+        n_stars++;
+
+        /* CoM correction: adjust star velocity to zero total system momentum.
+         * Star mass >> planet masses so adjusting only the star is sufficient. */
+        for (i = 0; i < g_nbodies; i++) {
+            if (i == s || root_star_of(i) != s) continue;
+            g_bodies[s].vel[0] -=
+                g_bodies[i].mass * g_bodies[i].vel[0] / g_bodies[s].mass;
+            g_bodies[s].vel[1] -=
+                g_bodies[i].mass * g_bodies[i].vel[1] / g_bodies[s].mass;
+            g_bodies[s].vel[2] -=
+                g_bodies[i].mass * g_bodies[i].vel[2] / g_bodies[s].mass;
+        }
+
+        /* Apply bulk velocity to all bodies in this system */
+        if (bv[s][0] != 0.0 || bv[s][1] != 0.0 || bv[s][2] != 0.0) {
+            for (i = 0; i < g_nbodies; i++) {
+                if (root_star_of(i) != s) continue;
+                g_bodies[i].vel[0] += bv[s][0];
+                g_bodies[i].vel[1] += bv[s][1];
+                g_bodies[i].vel[2] += bv[s][2];
+            }
+        }
+
+        /* Log */
+        int cnt = 0;
+        for (i = 0; i < g_nbodies; i++)
+            if (root_star_of(i) == s) cnt++;
+        fprintf(stdout,
+                "[universe] '%s' at (%.3g, %.3g, %.3g) ly  —  %d bod%s\n",
+                g_bodies[s].name,
+                g_bodies[s].pos[0] / LY,
+                g_bodies[s].pos[1] / LY,
+                g_bodies[s].pos[2] / LY,
+                cnt, cnt == 1 ? "y" : "ies");
+    }
+
+    fprintf(stdout, "[universe] total: %d bodies across %d star%s\n",
+            g_nbodies, n_stars, n_stars == 1 ? "" : "s");
 
     json_free(root);
 }

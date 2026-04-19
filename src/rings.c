@@ -198,10 +198,11 @@ static void render_disc(const ParticleDisc *d, const float vp[16])
     float px = (float)(par->pos[0] * RS);
     float py = (float)(par->pos[1] * RS);
     float pz = (float)(par->pos[2] * RS);
-
-    float dx   = px - (float)g_cam.pos[0];
-    float dy   = py - (float)g_cam.pos[1];
-    float dz   = pz - (float)g_cam.pos[2];
+    /* Camera-relative distance: subtract in double before cast to float to
+     * avoid float32 cancellation when the ring parent is far from the origin. */
+    float dx   = (float)(par->pos[0] * RS - g_cam.pos[0]);
+    float dy   = (float)(par->pos[1] * RS - g_cam.pos[1]);
+    float dz   = (float)(par->pos[2] * RS - g_cam.pos[2]);
     float dist = sqrtf(dx*dx + dy*dy + dz*dz);
 
     if (dist > SPRITE_DIST) {

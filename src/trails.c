@@ -79,6 +79,21 @@ void trails_render(const float vp[16])
 {
     if (!s_shader) return;
 
+    /* Distance from camera to nearest star — controls LOD fade.
+     * Computed in render units (AU).  Returns early if trails are fully faded. */
+    float trail_fade = 1.0f;
+    if (g_nbodies > 0) {
+        int star = nearest_star_idx();
+        float sdx = (float)(g_cam.pos[0] - g_bodies[star].pos[0] * RS);
+        float sdy = (float)(g_cam.pos[1] - g_bodies[star].pos[1] * RS);
+        float sdz = (float)(g_cam.pos[2] - g_bodies[star].pos[2] * RS);
+        float dist = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
+        trail_fade = 1.0f - (dist - SYS_TRAIL_FADE_START)
+                          / (SYS_TRAIL_FADE_END - SYS_TRAIL_FADE_START);
+        if (trail_fade > 1.0f) trail_fade = 1.0f;
+        if (trail_fade <= 0.0f) return;   /* fully faded — skip all work */
+    }
+
     glUseProgram(s_shader);
     glUniformMatrix4fv(s_loc_vp, 1, GL_FALSE, vp);
 
@@ -135,7 +150,7 @@ void trails_render(const float vp[16])
                         count * 3 * sizeof(float), sizeof(live), live);
 
         int draw_count = count + 1;
-        glUniform4f(s_loc_color, b->col[0], b->col[1], b->col[2], 0.6f);
+        glUniform4f(s_loc_color, b->col[0], b->col[1], b->col[2], 0.6f * trail_fade);
         glUniform1i(s_loc_count, draw_count);
         glDrawArrays(GL_LINE_STRIP, 0, draw_count);
     }

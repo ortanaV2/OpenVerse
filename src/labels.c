@@ -16,7 +16,12 @@
 #include "gl_utils.h"
 #include "math3d.h"
 
-#define MAX_LABEL_DIST 55.0f   /* AU — labels disappear beyond this */
+#define MAX_LABEL_DIST   55.0f  /* AU — hard far cutoff for non-star labels    */
+/* Hide label once camera is closer than this many body-radii to the centre.
+ * Prevents the label from sitting inside the billboard when you're landing.
+ * Stars use a larger close cutoff because glare dominates sooner.            */
+#define MIN_LABEL_RADII  10
+#define STAR_MIN_LABEL_RADII  80
 #define LBL_PAD        6.0f    /* extra px padding for overlap AABB  */
 #define LABEL_PX_H    14.0f    /* desired label height in pixels     */
 
@@ -140,7 +145,9 @@ void labels_init(void) {
         col.g = (Uint8)(fminf(g_bodies[i].col[1]*1.4f+0.15f, 1.0f)*255);
         col.b = (Uint8)(fminf(g_bodies[i].col[2]*1.4f+0.15f, 1.0f)*255);
         col.a = 255;
-        int is_moon = (g_bodies[i].parent >= 0);
+        /* moon: has a parent and that parent is not a star */
+        int is_moon = (g_bodies[i].parent >= 0 &&
+                       !g_bodies[g_bodies[i].parent].is_star);
         TTF_SetFontStyle(s_font, is_moon ? TTF_STYLE_ITALIC : TTF_STYLE_NORMAL);
         SDL_Surface *surf = TTF_RenderText_Blended(s_font, g_bodies[i].name, col);
         if (!surf) continue;
@@ -155,10 +162,11 @@ void labels_render(const float view[16], const float proj[16],
     (void)proj;   /* reserved for future use (e.g. depth-sort) */
     if (!s_shader || !s_font) return;
 
-    /* Camera right and up in world space (extracted from view matrix) */
-    Vec3 cam_right, cam_up;
+    /* Camera axes in world space (extracted from view matrix) */
+    Vec3 cam_right, cam_up, cam_fwd;
     mat4_get_right(view, cam_right);
     mat4_get_up   (view, cam_up);
+    mat4_get_fwd  (view, cam_fwd);
 
     /* FOV helper for computing world-space label size */
     float half_fov_tan = tanf(FOV * 0.5f * (float)(PI / 180.0));
@@ -170,11 +178,21 @@ void labels_render(const float view[16], const float proj[16],
     int   order[MAX_BODIES];
 
     for (int i = 0; i < g_nbodies; i++) {
-        int is_sun = (i == 0);
         order[i]   = i;
         lvis[i]    = 0;
-        if (!s_tex[i])                                continue;
-        if (!is_sun && info[i].dcam > MAX_LABEL_DIST) continue;
+        if (!s_tex[i]) continue;
+        /* Far cutoff: non-star labels are local-system annotations. */
+        if (!g_bodies[i].is_star && info[i].dcam > MAX_LABEL_DIST) continue;
+
+        /* Close cutoff applies to every body, including stars.
+         * Otherwise star labels linger until the projection/overlap logic
+         * happens to reject them, which feels inconsistent when approaching. */
+        {
+            float min_radii = g_bodies[i].is_star
+                            ? (float)STAR_MIN_LABEL_RADII
+                            : (float)MIN_LABEL_RADII;
+            if (info[i].dcam < min_radii * info[i].dr) continue;
+        }
 
         /* Anchor: just above the body centre.
          * Subtract camera position in double to eliminate float32 cancellation
@@ -203,33 +221,41 @@ void labels_render(const float view[16], const float proj[16],
         lvis[i] = 1;
     }
 
-    /* ---- Step 2: priority order — Sun, then planets, then moons.
-     * Within planets and within moons: sorted by camera distance (closest first).
-     * This guarantees planet labels always win over moon labels in overlap removal. */
+    /* ---- Step 2: priority order — stars (closest first), then planets,
+     * then moons.  Within each tier: sorted by camera distance (closest first).
+     * Stars always win over planets; planets always win over moons. */
     {
-        int np = 0, nm = 0;
-        int planets[MAX_BODIES], moons[MAX_BODIES];
-        for (int i = 1; i < g_nbodies; i++) {
-            if (g_bodies[i].parent < 0) planets[np++] = i;
-            else                        moons  [nm++] = i;
+        int ns = 0, np = 0, nm = 0;
+        int stars[MAX_BODIES], planets[MAX_BODIES], moons[MAX_BODIES];
+        for (int i = 0; i < g_nbodies; i++) {
+            if      (g_bodies[i].is_star)       stars  [ns++] = i;
+            /* planet: no parent, or parent is a star (not a moon of a planet) */
+            else if (g_bodies[i].parent < 0 ||
+                     g_bodies[g_bodies[i].parent].is_star) planets[np++] = i;
+            else                                           moons  [nm++] = i;
         }
-        /* insertion-sort planets by dcam */
+        /* insertion-sort each tier by dcam (closest first) */
+        for (int i = 1; i < ns; i++) {
+            int tmp = stars[i], k = i;
+            while (k > 0 && info[stars[k-1]].dcam > info[tmp].dcam)
+                { stars[k] = stars[k-1]; k--; }
+            stars[k] = tmp;
+        }
         for (int i = 1; i < np; i++) {
             int tmp = planets[i], k = i;
             while (k > 0 && info[planets[k-1]].dcam > info[tmp].dcam)
                 { planets[k] = planets[k-1]; k--; }
             planets[k] = tmp;
         }
-        /* insertion-sort moons by dcam */
         for (int i = 1; i < nm; i++) {
             int tmp = moons[i], k = i;
             while (k > 0 && info[moons[k-1]].dcam > info[tmp].dcam)
                 { moons[k] = moons[k-1]; k--; }
             moons[k] = tmp;
         }
-        order[0] = 0;   /* Sun always first */
-        for (int i = 0; i < np; i++) order[1 + i]        = planets[i];
-        for (int i = 0; i < nm; i++) order[1 + np + i]   = moons[i];
+        for (int i = 0; i < ns; i++) order[i]              = stars[i];
+        for (int i = 0; i < np; i++) order[ns + i]          = planets[i];
+        for (int i = 0; i < nm; i++) order[ns + np + i]     = moons[i];
     }
 
     /* ---- Step 3: greedy AABB overlap removal ---- */
@@ -280,23 +306,35 @@ void labels_render(const float view[16], const float proj[16],
         if (!s_active[i]) continue;
         if (!s_tex[i])    continue;
 
-        /* World-space label dimensions */
-        float fh = (info[i].dcam * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;
-        float fw = fh * (float)s_tex_w[i] / (float)s_tex_h[i];
-
-        /* Camera-relative anchor computed fresh from the double-precision body
-         * position — eliminates float32 jitter when close to small bodies.
-         * vp is proj×view_rot so camera-relative coords map correctly. */
+        /* Camera-relative body position (double-precision subtraction to avoid
+         * float32 cancellation near large-coordinate bodies). */
         double cx2 = (double)g_cam.pos[0];
         double cy2 = (double)g_cam.pos[1];
         double cz2 = (double)g_cam.pos[2];
-        float bax = (float)(g_bodies[i].pos[0] * RS - cx2);
-        float bay = (float)(g_bodies[i].pos[1] * RS - cy2) + info[i].dr * 1.4f;
-        float baz = (float)(g_bodies[i].pos[2] * RS - cz2);
+        float bx = (float)(g_bodies[i].pos[0] * RS - cx2);
+        float by = (float)(g_bodies[i].pos[1] * RS - cy2);
+        float bz = (float)(g_bodies[i].pos[2] * RS - cz2);
 
-        float ax = bax + cam_right[0]*(fw*0.1f);
-        float ay = bay              + cam_up[1]*(fh*0.1f);
-        float az = baz + cam_right[2]*(fw*0.1f);
+        /* Eye-space depth — projection of body position onto the viewing direction.
+         * This is STABLE under camera rotation: rotating the camera doesn't change
+         * how far away the body is along the forward axis.
+         * Using dcam (Euclidean distance) instead would cause fh to oscillate as
+         * the body moves off-axis, because dcam = eye_z / cos(θ). */
+        float eye_z = bx*cam_fwd[0] + by*cam_fwd[1] + bz*cam_fwd[2];
+        if (eye_z <= 0.0f) continue;   /* behind camera — skip */
+
+        /* World-space label dimensions derived from eye_z (constant on rotation) */
+        float fh = (eye_z * 2.0f * LABEL_PX_H * half_fov_tan) / (float)WIN_H;
+        float fw = fh * (float)s_tex_w[i] / (float)s_tex_h[i];
+
+        /* Anchor: place above the body along the camera up axis, then nudge
+         * the quad origin right+up so the text sits clear of the body disc.
+         * Use FULL cam_right/cam_up vectors (not individual components) to avoid
+         * anchor jumping when the camera is tilted. */
+        float dr_off = info[i].dr * 1.4f;
+        float ax = bx + cam_up[0]*dr_off + cam_right[0]*(fw*0.1f) + cam_up[0]*(fh*0.1f);
+        float ay = by + cam_up[1]*dr_off + cam_right[1]*(fw*0.1f) + cam_up[1]*(fh*0.1f);
+        float az = bz + cam_up[2]*dr_off + cam_right[2]*(fw*0.1f) + cam_up[2]*(fh*0.1f);
 
         Vec3 right_scaled, up_scaled;
         vec3_scale(right_scaled, cam_right, fw);
