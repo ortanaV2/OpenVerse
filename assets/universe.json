@@ -229,6 +229,74 @@
     },
 
     {
+      "name": "Pallas",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 2.06e20,
+      "radius_km": 256.5,
+      "color": [0.62, 0.64, 0.68],
+      "keplerian": {
+        "a": 2.7700,
+        "e": 0.2302,
+        "i": 34.93,
+        "Omega": 172.92,
+        "omega_tilde": 123.79,
+        "L": 164.39
+      }
+    },
+
+    {
+      "name": "Vesta",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 2.59076e20,
+      "radius_km": 262.7,
+      "color": [0.78, 0.72, 0.65],
+      "keplerian": {
+        "a": 2.3620,
+        "e": 0.0894,
+        "i": 7.14,
+        "Omega": 103.71,
+        "omega_tilde": 255.37,
+        "L": 64.72
+      }
+    },
+
+    {
+      "name": "Hygiea",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 8.67e19,
+      "radius_km": 203.6,
+      "color": [0.50, 0.52, 0.50],
+      "keplerian": {
+        "a": 3.1400,
+        "e": 0.1110,
+        "i": 3.83,
+        "Omega": 283.17,
+        "omega_tilde": 235.65,
+        "L": 310.83
+      }
+    },
+
+    {
+      "name": "Interamnia",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 7.493e19,
+      "radius_km": 153.2,
+      "color": [0.48, 0.50, 0.52],
+      "keplerian": {
+        "a": 3.0580,
+        "e": 0.1559,
+        "i": 17.31,
+        "Omega": 280.17,
+        "omega_tilde": 14.58,
+        "L": 50.85
+      }
+    },
+
+    {
       "name": "Pluto",
       "type": "dwarf_planet",
       "parent": "Sun",
@@ -664,10 +732,10 @@
     // ================================================================
     // Proxima Centauri — 4.243 ly (slightly closer than Alpha Cen AB;
     // gravitationally bound to the AB pair ~0.21 ly away).
-    // M5.5Ve red dwarf with confirmed rocky planet Proxima b.
+    // M5.5Ve red dwarf with confirmed rocky planets Proxima b and d.
     // ================================================================
     {
-      "name": "Proxima Cen",
+      "name": "Proxima Centauri",
       "type": "star",
       "pos_ly": [3.818, -0.876, -1.271],
       "mass": 2.446e29,
@@ -678,12 +746,31 @@
       "velocity_km_s": [-22.2, 4.1, 2.9]
     },
 
+    // Proxima d — confirmed sub-Earth, ~0.26 Me minimum mass.
+    // Proxima d: 5.1-day orbit at 0.0288 AU.
+    {
+      "name": "Proxima d",
+      "type": "planet",
+      "parent": "Proxima Centauri",
+      "mass": 1.553e24,
+      "radius_km": 4409.0,
+      "color": [0.58, 0.48, 0.40],
+      "keplerian": {
+        "a": 0.02881,
+        "e": 0.0,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 180.0
+      }
+    },
+
     // Proxima b — confirmed rocky planet, ~1.07 Me minimum mass,
     // 11.186-day orbit at 0.0485 AU, habitable-zone candidate.
     {
       "name": "Proxima b",
       "type": "planet",
-      "parent": "Proxima Cen",
+      "parent": "Proxima Centauri",
       "mass": 6.38e24,
       "radius_km": 7160.0,
       "color": [0.42, 0.55, 0.38],
@@ -718,18 +805,86 @@
     // Barnard's Star — 5.96 ly
     // M4Ve red dwarf, highest proper motion of any star (~10.4"/yr).
     // Heliocentric radial velocity ~-110 km/s (approaching).
-    // Compact confirmed sub-Earth planets are not included yet.
+    // Four compact confirmed sub-Earth planets orbit close to the star.
     // ================================================================
     {
       "name": "Barnard's Star",
       "type": "star",
       "pos_ly": [-1.12, -5.78, 0.91],
-      "mass": 2.864e29,
+      "mass": 3.182e29,
       "radius_km": 136400.0,
       "color": [1.0, 0.44, 0.16],
       "obliquity_deg": 0.0,
       "rotation_period_days": 130.0,
       "velocity_km_s": [22.5, 107.3, 35.2]
+    },
+
+    {
+      "name": "Barnard d",
+      "type": "planet",
+      "parent": "Barnard's Star",
+      "mass": 1.571e24,
+      "radius_km": 4422.0,
+      "color": [0.62, 0.42, 0.34],
+      "keplerian": {
+        "a": 0.0188,
+        "e": 0.04,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 40.0
+      }
+    },
+
+    {
+      "name": "Barnard b",
+      "type": "planet",
+      "parent": "Barnard's Star",
+      "mass": 1.786e24,
+      "radius_km": 4587.0,
+      "color": [0.70, 0.48, 0.36],
+      "keplerian": {
+        "a": 0.0229,
+        "e": 0.03,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 140.0
+      }
+    },
+
+    {
+      "name": "Barnard c",
+      "type": "planet",
+      "parent": "Barnard's Star",
+      "mass": 2.001e24,
+      "radius_km": 4734.0,
+      "color": [0.56, 0.50, 0.46],
+      "keplerian": {
+        "a": 0.0274,
+        "e": 0.08,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 240.0
+      }
+    },
+
+    {
+      "name": "Barnard e",
+      "type": "planet",
+      "parent": "Barnard's Star",
+      "mass": 1.153e24,
+      "radius_km": 4058.0,
+      "color": [0.46, 0.52, 0.56],
+      "keplerian": {
+        "a": 0.0381,
+        "e": 0.04,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 320.0
+      }
     },
 
     // ================================================================
@@ -925,6 +1080,200 @@
         "Omega": 0.0,
         "omega_tilde": 0.0,
         "L": 200.0
+      }
+    },
+
+    // ================================================================
+    // YZ Ceti — 12.11 ly
+    // M4.5V red dwarf with three compact confirmed terrestrial planets.
+    // ================================================================
+    {
+      "name": "YZ Ceti",
+      "type": "star",
+      "pos_ly": [11.003, -4.680, 1.898],
+      "mass": 2.824e29,
+      "radius_km": 109300.0,
+      "color": [1.0, 0.34, 0.10],
+      "obliquity_deg": 0.0,
+      "rotation_period_days": 68.3,
+      "velocity_km_s": [22.238, -9.517, 28.135]
+    },
+
+    {
+      "name": "YZ Ceti b",
+      "type": "planet",
+      "parent": "YZ Ceti",
+      "mass": 4.180e24,
+      "radius_km": 5817.0,
+      "color": [0.70, 0.42, 0.32],
+      "keplerian": {
+        "a": 0.01634,
+        "e": 0.06,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 25.0
+      }
+    },
+
+    {
+      "name": "YZ Ceti c",
+      "type": "planet",
+      "parent": "YZ Ceti",
+      "mass": 6.808e24,
+      "radius_km": 6690.0,
+      "color": [0.58, 0.54, 0.48],
+      "keplerian": {
+        "a": 0.02156,
+        "e": 0.0,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 145.0
+      }
+    },
+
+    {
+      "name": "YZ Ceti d",
+      "type": "planet",
+      "parent": "YZ Ceti",
+      "mass": 6.509e24,
+      "radius_km": 6562.0,
+      "color": [0.48, 0.58, 0.62],
+      "keplerian": {
+        "a": 0.02851,
+        "e": 0.07,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 265.0
+      }
+    },
+
+    // ================================================================
+    // Teegarden's Star — 12.49 ly
+    // Very low-mass red dwarf with three confirmed close-in planets.
+    // ================================================================
+    {
+      "name": "Teegarden's Star",
+      "type": "star",
+      "pos_ly": [8.707, 0.066, 8.961],
+      "mass": 1.929e29,
+      "radius_km": 76560.0,
+      "color": [1.0, 0.26, 0.08],
+      "obliquity_deg": 0.0,
+      "rotation_period_days": 99.6,
+      "velocity_km_s": [19.506, -83.835, 76.891]
+    },
+
+    {
+      "name": "Teegarden's Star b",
+      "type": "planet",
+      "parent": "Teegarden's Star",
+      "mass": 6.928e24,
+      "radius_km": 6690.0,
+      "color": [0.50, 0.64, 0.72],
+      "keplerian": {
+        "a": 0.0259,
+        "e": 0.03,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 60.0
+      },
+      "atmosphere": {
+        "color": [0.48, 0.68, 0.92],
+        "intensity": 0.35,
+        "scale": 1.12
+      }
+    },
+
+    {
+      "name": "Teegarden's Star c",
+      "type": "planet",
+      "parent": "Teegarden's Star",
+      "mass": 6.271e24,
+      "radius_km": 6498.0,
+      "color": [0.45, 0.58, 0.56],
+      "keplerian": {
+        "a": 0.0455,
+        "e": 0.04,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 180.0
+      }
+    },
+
+    {
+      "name": "Teegarden's Star d",
+      "type": "planet",
+      "parent": "Teegarden's Star",
+      "mass": 4.897e24,
+      "radius_km": 6078.0,
+      "color": [0.62, 0.60, 0.52],
+      "keplerian": {
+        "a": 0.0791,
+        "e": 0.07,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 300.0
+      }
+    },
+
+    // ================================================================
+    // GJ 273 / Luyten's Star — 12.39 ly
+    // Nearby M dwarf with two confirmed radial-velocity planets.
+    // ================================================================
+    {
+      "name": "GJ 273",
+      "type": "star",
+      "pos_ly": [-4.593, -3.521, 10.960],
+      "mass": 5.767e29,
+      "radius_km": 203900.0,
+      "color": [1.0, 0.46, 0.18],
+      "obliquity_deg": 0.0,
+      "rotation_period_days": 99.0,
+      "velocity_km_s": [-18.549, -66.683, -8.617]
+    },
+
+    {
+      "name": "GJ 273 c",
+      "type": "planet",
+      "parent": "GJ 273",
+      "mass": 7.047e24,
+      "radius_km": 6753.0,
+      "color": [0.72, 0.50, 0.36],
+      "keplerian": {
+        "a": 0.036467,
+        "e": 0.17,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 100.0
+      }
+    },
+
+    {
+      "name": "GJ 273 b",
+      "type": "planet",
+      "parent": "GJ 273",
+      "mass": 1.726e25,
+      "radius_km": 9620.0,
+      "color": [0.35, 0.55, 0.78],
+      "keplerian": {
+        "a": 0.091101,
+        "e": 0.10,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 260.0
+      },
+      "atmosphere": {
+        "color": [0.42, 0.62, 0.95],
+        "intensity": 0.35,
+        "scale": 1.12
       }
     },
 

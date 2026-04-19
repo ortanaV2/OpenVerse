@@ -391,7 +391,7 @@ void render_frame(const float view[16], const float proj[16],
 
         /* Lighting direction: sun_rel = (root star) - body.
          * Walk parent chain to find the star this body orbits so Proxima b
-         * is lit by Proxima Cen, not Sol. */
+         * is lit by Proxima Centauri, not Sol. */
         int ls = i;
         while (g_bodies[ls].parent >= 0) ls = g_bodies[ls].parent;
         float sr_x = (float)((g_bodies[ls].pos[0] - b->pos[0]) * RS);
@@ -483,7 +483,7 @@ void render_frame(const float view[16], const float proj[16],
 
     /* Build priority order: stars (by dcam) > planets (by dcam) > moons (by dcam).
      * Stars must come first so they always win the screen-space overlap slot over
-     * co-located planets (e.g. Proxima b and Proxima Cen share almost the same
+     * co-located planets (e.g. Proxima b and Proxima Centauri share almost the same
      * screen position when seen from Sol — without this, the planet can grab the
      * slot and the star dot never renders because dot_fade kills the planet dot). */
     int dot_order[MAX_BODIES];
