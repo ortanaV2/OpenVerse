@@ -248,7 +248,9 @@ void asteroids_step(double dt) {
     double bx[MAX_MAJOR], by[MAX_MAJOR], bz[MAX_MAJOR], bgm[MAX_MAJOR];
     int nb = 0;
     for (int j = 0; j < g_nbodies && nb < MAX_MAJOR; j++) {
-        if (g_bodies[j].parent >= 0) continue;   /* skip moons */
+        /* skip moons (parent >= 0 and parent is not a star) */
+        if (g_bodies[j].parent >= 0 &&
+            !g_bodies[g_bodies[j].parent].is_star) continue;
         bx[nb]  = g_bodies[j].pos[0];
         by[nb]  = g_bodies[j].pos[1];
         bz[nb]  = g_bodies[j].pos[2];

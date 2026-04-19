@@ -46,44 +46,22 @@ static GLint  s_sp_rotation    = -1;
 static GLint  s_sp_obliquity   = -1;
 static GLint  s_sp_ptype       = -1;
 
-/* Planet-type mapping by body index (matches universe.json loading order).
- * 0=rocky  1=Earth  2=Mars  3=Venus  4=Jupiter  5=Saturn
- * 6=ice-giant  7=Io  8=Titan  9=Europa                      */
-static const int s_planet_types[] = {
-    0,          /* 0  Sun   (star — emission path, type unused) */
-    0,          /* 1  Mercury  */
-    3,          /* 2  Venus    */
-    1,          /* 3  Earth    */
-    2,          /* 4  Mars     */
-    4,          /* 5  Jupiter  */
-    5,          /* 6  Saturn   */
-    6,          /* 7  Uranus   */
-    6,          /* 8  Neptune  */
-    0,          /* 9  Ceres    */
-    0,          /* 10 Pluto    */
-    0,          /* 11 Eris     */
-    0,          /* 12 Makemake */
-    0,          /* 13 Haumea   */
-    0,          /* 14 Moon     */
-    0,          /* 15 Phobos   */
-    0,          /* 16 Deimos   */
-    7,          /* 17 Io       */
-    9,          /* 18 Europa   */
-    0,          /* 19 Ganymede */
-    0,          /* 20 Callisto */
-    0,          /* 21 Mimas    */
-    0,          /* 22 Enceladus*/
-    0,          /* 23 Tethys   */
-    0,          /* 24 Dione    */
-    0,          /* 25 Rhea     */
-    8,          /* 26 Titan    */
-    0,          /* 27 Miranda  */
-    0,          /* 28 Ariel    */
-    0,          /* 29 Umbriel  */
-    0,          /* 30 Titania  */
-    0,          /* 31 Oberon   */
-    0,          /* 32 Triton   */
-};
+/* Planet-type lookup by body name — robust against loader order changes.
+ * 0=rocky(default)  1=Earth  2=Mars  3=Venus  4=Jupiter  5=Saturn
+ * 6=ice-giant       7=Io     8=Titan 9=Europa                       */
+static int get_planet_type(const char *name)
+{
+    static const struct { const char *name; int ptype; } tbl[] = {
+        { "Earth",   1 }, { "Mars",    2 }, { "Venus",   3 },
+        { "Jupiter", 4 }, { "Saturn",  5 }, { "Uranus",  6 },
+        { "Neptune", 6 }, { "Io",      7 }, { "Titan",   8 },
+        { "Europa",  9 }, { NULL,      0 }
+    };
+    int k;
+    for (k = 0; tbl[k].name; k++)
+        if (strcmp(name, tbl[k].name) == 0) return tbl[k].ptype;
+    return 0;   /* rocky / default for everything else */
+}
 
 /* ------------------------------------------------------------------ atmosphere */
 static GLuint s_atm_shader   = 0;
@@ -305,11 +283,14 @@ void render_frame(const float view[16], const float proj[16],
         float wy = (float)(b->pos[1] * RS);
         float wz = (float)(b->pos[2] * RS);
 
-        /* Camera distance (AU) */
-        Vec4 wv4 = { wx, wy, wz, 1.0f };
-        Vec4 cv4;
-        mat4_mul_vec4(cv4, view, wv4);
-        float dcam = sqrtf(cv4[0]*cv4[0] + cv4[1]*cv4[1] + cv4[2]*cv4[2]);
+        /* Camera-relative position in double precision.
+         * Float32 world coords lose ~5 digits for bodies at large offsets
+         * (e.g. Proxima b at 241 000 AU), causing dcam to be imprecise and
+         * the px threshold to flicker → sphere pops in and out randomly. */
+        double dxd = b->pos[0] * RS - g_cam.pos[0];
+        double dyd = b->pos[1] * RS - g_cam.pos[1];
+        double dzd = b->pos[2] * RS - g_cam.pos[2];
+        float dcam = (float)sqrt(dxd*dxd + dyd*dyd + dzd*dzd);
 
         float dr = visual_radius(i, dcam);
 
@@ -319,26 +300,43 @@ void render_frame(const float view[16], const float proj[16],
         info[i].pos[2] = wz;
         info[i].dr     = dr;
         info[i].dcam   = dcam;
-        /* show=1 when the body renders smaller than ~2px (label replaces disc) */
-        float px = (WIN_H / 2.0f) * dr / (dcam * half_fov_tan() + 1e-9f);
-        info[i].show   = (px < 2.5f) ? 1 : 0;
 
-        /* Sub-pixel bodies are shown as dots only — skip billboard render.
-         * Rendering a sub-pixel sphere quad produces 1-2 unstable fragments
-         * at semi-random pixels that flicker as the camera moves/rotates. */
+        /* Use eye_z (depth along view axis) for the pixel-size threshold.
+         * dcam (Euclidean) = eye_z / cos(θ) — rotating the camera changes θ
+         * and therefore dcam, making the show flag oscillate at the boundary.
+         * eye_z is constant under pure rotation, so the transition is stable. */
+        float eye_z = (float)(dxd*cam_fwd[0] + dyd*cam_fwd[1] + dzd*cam_fwd[2]);
+        float px = (eye_z > 0.0f)
+                   ? (WIN_H / 2.0f) * dr / (eye_z * half_fov_tan() + 1e-9f)
+                   : 0.0f;
+        /* Dot–sphere transition threshold.
+         * glPointSize is 2.5px, which is a dot of DIAMETER 2.5px.
+         * A sphere at px=R has projected DIAMETER = 2*R px.
+         * Setting the threshold at px < 1.25 means the sphere first appears
+         * at diameter 2*1.25 = 2.5px — exactly matching the dot size.
+         * Using px < 2.5 (old value) made the sphere pop in at 5px diameter,
+         * which was 2× bigger than the dot and visually jarring. */
+        info[i].show = (px < 1.25f) ? 1 : 0;
+
+        /* Sub-pixel bodies are shown as dots only — skip billboard render. */
         if (info[i].show) continue;
 
-        /* Compute oc = cam - center and sun_rel = sun - center in double
-         * to avoid float cancellation for small/distant bodies.           */
+        /* Compute oc = cam - center in double to avoid float cancellation. */
         double cam_mx = (double)g_cam.pos[0] * AU;
         double cam_my = (double)g_cam.pos[1] * AU;
         double cam_mz = (double)g_cam.pos[2] * AU;
         float oc_x = (float)((cam_mx - b->pos[0]) * RS);
         float oc_y = (float)((cam_my - b->pos[1]) * RS);
         float oc_z = (float)((cam_mz - b->pos[2]) * RS);
-        float sr_x = (float)((g_bodies[0].pos[0] - b->pos[0]) * RS);
-        float sr_y = (float)((g_bodies[0].pos[1] - b->pos[1]) * RS);
-        float sr_z = (float)((g_bodies[0].pos[2] - b->pos[2]) * RS);
+
+        /* Lighting direction: sun_rel = (root star) - body.
+         * Walk parent chain to find the star this body orbits so Proxima b
+         * is lit by Proxima Cen, not Sol. */
+        int ls = i;
+        while (g_bodies[ls].parent >= 0) ls = g_bodies[ls].parent;
+        float sr_x = (float)((g_bodies[ls].pos[0] - b->pos[0]) * RS);
+        float sr_y = (float)((g_bodies[ls].pos[1] - b->pos[1]) * RS);
+        float sr_z = (float)((g_bodies[ls].pos[2] - b->pos[2]) * RS);
 
         /* u_center is camera-relative (= -u_oc) so the billboard vertex
          * positions computed in phong.vert are free of float32 world-space
@@ -351,14 +349,10 @@ void render_frame(const float view[16], const float proj[16],
         glUniform1f(s_sp_emission, b->is_star ? 1.0f : 0.0f);
         glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
 
-        /* Procedural surface texture uniforms */
+        /* Procedural surface texture — name-based lookup, index-independent */
         glUniform1f(s_sp_rotation,  (float)b->rotation_angle);
         glUniform1f(s_sp_obliquity, (float)(b->obliquity * (PI / 180.0)));
-        {
-            int ptype = (i < (int)(sizeof(s_planet_types)/sizeof(s_planet_types[0])))
-                        ? s_planet_types[i] : 0;
-            glUniform1i(s_sp_ptype, ptype);
-        }
+        glUniform1i(s_sp_ptype,     get_planet_type(b->name));
 
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
@@ -393,9 +387,15 @@ void render_frame(const float view[16], const float proj[16],
             float oc_x = (float)((cam_mx - b->pos[0]) * RS);
             float oc_y = (float)((cam_my - b->pos[1]) * RS);
             float oc_z = (float)((cam_mz - b->pos[2]) * RS);
-            float sr_x = (float)((g_bodies[0].pos[0] - b->pos[0]) * RS);
-            float sr_y = (float)((g_bodies[0].pos[1] - b->pos[1]) * RS);
-            float sr_z = (float)((g_bodies[0].pos[2] - b->pos[2]) * RS);
+            /* Lighting: root star of this body, same logic as sphere pass */
+            float sr_x, sr_y, sr_z;
+            {
+                int ls = i;
+                while (g_bodies[ls].parent >= 0) ls = g_bodies[ls].parent;
+                sr_x = (float)((g_bodies[ls].pos[0] - b->pos[0]) * RS);
+                sr_y = (float)((g_bodies[ls].pos[1] - b->pos[1]) * RS);
+                sr_z = (float)((g_bodies[ls].pos[2] - b->pos[2]) * RS);
+            }
 
             float planet_r = info[i].dr;
             float atm_r    = planet_r * scale;
@@ -421,13 +421,26 @@ void render_frame(const float view[16], const float proj[16],
      * closer than DOT_EXCL_PX pixels.                                      */
 #define DOT_EXCL_PX 6.0f   /* exclusion radius in pixels */
 
-    /* Build priority order: Sun, then planets by dcam, then moons by dcam */
+    /* Build priority order: stars (by dcam) > planets (by dcam) > moons (by dcam).
+     * Stars must come first so they always win the screen-space overlap slot over
+     * co-located planets (e.g. Proxima b and Proxima Cen share almost the same
+     * screen position when seen from Sol — without this, the planet can grab the
+     * slot and the star dot never renders because dot_fade kills the planet dot). */
     int dot_order[MAX_BODIES];
-    int dot_np = 0, dot_nm = 0;
-    int dot_planets[MAX_BODIES], dot_moons[MAX_BODIES];
-    for (int i = 1; i < g_nbodies; i++) {
-        if (g_bodies[i].parent < 0) dot_planets[dot_np++] = i;
-        else                        dot_moons  [dot_nm++] = i;
+    int dot_ns = 0, dot_np = 0, dot_nm = 0;
+    int dot_stars[MAX_BODIES], dot_planets[MAX_BODIES], dot_moons[MAX_BODIES];
+    for (int i = 0; i < g_nbodies; i++) {
+        if      (g_bodies[i].is_star)       dot_stars  [dot_ns++] = i;
+        /* planet: no parent, or parent is a star (not a moon of a planet) */
+        else if (g_bodies[i].parent < 0 ||
+                 g_bodies[g_bodies[i].parent].is_star) dot_planets[dot_np++] = i;
+        else                                           dot_moons  [dot_nm++] = i;
+    }
+    for (int i = 1; i < dot_ns; i++) {
+        int t = dot_stars[i], k = i;
+        while (k > 0 && info[dot_stars[k-1]].dcam > info[t].dcam)
+            { dot_stars[k] = dot_stars[k-1]; k--; }
+        dot_stars[k] = t;
     }
     for (int i = 1; i < dot_np; i++) {
         int t = dot_planets[i], k = i;
@@ -441,9 +454,9 @@ void render_frame(const float view[16], const float proj[16],
             { dot_moons[k] = dot_moons[k-1]; k--; }
         dot_moons[k] = t;
     }
-    dot_order[0] = 0;
-    for (int i = 0; i < dot_np; i++) dot_order[1 + i]        = dot_planets[i];
-    for (int i = 0; i < dot_nm; i++) dot_order[1 + dot_np + i] = dot_moons[i];
+    for (int i = 0; i < dot_ns; i++) dot_order[i]                  = dot_stars[i];
+    for (int i = 0; i < dot_np; i++) dot_order[dot_ns + i]          = dot_planets[i];
+    for (int i = 0; i < dot_nm; i++) dot_order[dot_ns + dot_np + i] = dot_moons[i];
 
     /* Project to screen, greedy overlap removal, collect surviving dots */
     float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
@@ -472,17 +485,18 @@ void render_frame(const float view[16], const float proj[16],
         }
     }
 
-    /* Distance from camera to star — used for LOD dot fade.
+    /* Distance from camera to nearest star — used for LOD dot fade.
      * Non-star dots fade from full brightness at SYS_DOT_FADE_START to black
      * (invisible against the near-black background) at SYS_DOT_FADE_END.
      * The star dot is always kept at full brightness.                        */
     float dot_fade = 1.0f;
     {
-        float sdx = (float)(g_cam.pos[0]) - sun_wx;
-        float sdy = (float)(g_cam.pos[1]) - sun_wy;
-        float sdz = (float)(g_cam.pos[2]) - sun_wz;
-        float dist_sun = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
-        dot_fade = 1.0f - (dist_sun - SYS_DOT_FADE_START)
+        int ref_star = nearest_star_idx();
+        float sdx = (float)(g_cam.pos[0]) - (float)(g_bodies[ref_star].pos[0] * RS);
+        float sdy = (float)(g_cam.pos[1]) - (float)(g_bodies[ref_star].pos[1] * RS);
+        float sdz = (float)(g_cam.pos[2]) - (float)(g_bodies[ref_star].pos[2] * RS);
+        float dist_star = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
+        dot_fade = 1.0f - (dist_star - SYS_DOT_FADE_START)
                         / (SYS_DOT_FADE_END - SYS_DOT_FADE_START);
         if (dot_fade > 1.0f) dot_fade = 1.0f;
         if (dot_fade < 0.0f) dot_fade = 0.0f;

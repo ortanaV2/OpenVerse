@@ -2,653 +2,701 @@
   // Solar system configuration for OpenVerse
   // Keplerian elements from JPL Table 1 (J2000.0 epoch, valid ~1800-2050 AD)
   // Moon elements from JPL/NASA fact sheets
-  "systems": [
+  "bodies": [
+
+    // ================================================================
+    // Sol — our Sun
+    // ================================================================
     {
-      "name": "Sol",
-      "position_ly": [0.0, 0.0, 0.0],
-      "bodies": [
+      "name": "Sun",
+      "type": "star",
+      "pos_ly": [0.0, 0.0, 0.0],
+      "mass": 1.989e30,
+      "radius_km": 696000.0,
+      "color": [1.0, 0.92, 0.23],
+      "obliquity_deg": 7.25,
+      "rotation_period_days": 25.38
+    },
 
-        // ----------------------------------------------------------------
-        // Star
-        // ----------------------------------------------------------------
-        {
-          "name": "Sun",
-          "type": "star",
-          "mass": 1.989e30,
-          "radius_km": 696000.0,
-          "color": [1.0, 0.92, 0.23],
-          "obliquity_deg": 7.25,
-          "rotation_period_days": 25.38
-        },
+    // ----------------------------------------------------------------
+    // Planets — Solar System
+    // ----------------------------------------------------------------
+    {
+      "name": "Mercury",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 3.301e23,
+      "radius_km": 2439.7,
+      "color": [0.75, 0.72, 0.68],
+      "obliquity_deg": 0.034,
+      "rotation_period_days": 58.646,
+      "keplerian": {
+        "a": 0.38709927,
+        "e": 0.20563593,
+        "i": 7.00497902,
+        "Omega": 48.33076593,
+        "omega_tilde": 77.45779628,
+        "L": 252.25032350
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Planets
-        // ----------------------------------------------------------------
-        {
-          "name": "Mercury",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 3.301e23,
-          "radius_km": 2439.7,
-          "color": [0.75, 0.72, 0.68],
-          "obliquity_deg": 0.034,
-          "rotation_period_days": 58.646,
-          "keplerian": {
-            "a": 0.38709927,
-            "e": 0.20563593,
-            "i": 7.00497902,
-            "Omega": 48.33076593,
-            "omega_tilde": 77.45779628,
-            "L": 252.25032350
-          }
-        },
+    {
+      "name": "Venus",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 4.867e24,
+      "radius_km": 6051.8,
+      "color": [0.95, 0.78, 0.35],
+      "obliquity_deg": 177.4,
+      "rotation_period_days": 243.025,
+      "keplerian": {
+        "a": 0.72333566,
+        "e": 0.00677672,
+        "i": 3.39467605,
+        "Omega": 76.67984255,
+        "omega_tilde": 131.60246718,
+        "L": 181.97909950
+      },
+      "atmosphere": {
+        "color": [0.92, 0.84, 0.56],
+        "intensity": 0.78,
+        "scale": 1.50
+      }
+    },
 
-        {
-          "name": "Venus",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 4.867e24,
-          "radius_km": 6051.8,
-          "color": [0.95, 0.78, 0.35],
-          "obliquity_deg": 177.4,
-          "rotation_period_days": 243.025,
-          "keplerian": {
-            "a": 0.72333566,
-            "e": 0.00677672,
-            "i": 3.39467605,
-            "Omega": 76.67984255,
-            "omega_tilde": 131.60246718,
-            "L": 181.97909950
-          },
-          "atmosphere": {
-            "color": [0.92, 0.84, 0.56],
-            "intensity": 0.78,
-            "scale": 1.50
-          }
-        },
+    {
+      "name": "Earth",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 5.972e24,
+      "radius_km": 6371.0,
+      "color": [0.27, 0.55, 0.95],
+      "obliquity_deg": 23.44,
+      "rotation_period_days": 0.99727,
+      "keplerian": {
+        "a": 1.00000261,
+        "e": 0.01671123,
+        "i": -0.00001531,
+        "Omega": 0.0,
+        "omega_tilde": 102.93768193,
+        "L": 100.46457166
+      },
+      "atmosphere": {
+        "color": [0.45, 0.65, 1.00],
+        "intensity": 0.60,
+        "scale": 1.30
+      }
+    },
 
-        {
-          "name": "Earth",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 5.972e24,
-          "radius_km": 6371.0,
-          "color": [0.27, 0.55, 0.95],
-          "obliquity_deg": 23.44,
-          "rotation_period_days": 0.99727,
-          "keplerian": {
-            "a": 1.00000261,
-            "e": 0.01671123,
-            "i": -0.00001531,
-            "Omega": 0.0,
-            "omega_tilde": 102.93768193,
-            "L": 100.46457166
-          },
-          "atmosphere": {
-            "color": [0.45, 0.65, 1.00],
-            "intensity": 0.60,
-            "scale": 1.30
-          }
-        },
+    {
+      "name": "Mars",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 6.417e23,
+      "radius_km": 3389.5,
+      "color": [0.90, 0.32, 0.14],
+      "obliquity_deg": 25.19,
+      "rotation_period_days": 1.02596,
+      "keplerian": {
+        "a": 1.52371034,
+        "e": 0.09339410,
+        "i": 1.84969142,
+        "Omega": 49.55953891,
+        "omega_tilde": -23.94362959,
+        "L": -4.55343205
+      },
+      "atmosphere": {
+        "color": [0.85, 0.45, 0.25],
+        "intensity": 0.35,
+        "scale": 1.22
+      }
+    },
 
-        {
-          "name": "Mars",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 6.417e23,
-          "radius_km": 3389.5,
-          "color": [0.90, 0.32, 0.14],
-          "obliquity_deg": 25.19,
-          "rotation_period_days": 1.02596,
-          "keplerian": {
-            "a": 1.52371034,
-            "e": 0.09339410,
-            "i": 1.84969142,
-            "Omega": 49.55953891,
-            "omega_tilde": -23.94362959,
-            "L": -4.55343205
-          },
-          "atmosphere": {
-            "color": [0.85, 0.45, 0.25],
-            "intensity": 0.35,
-            "scale": 1.22
-          }
-        },
+    {
+      "name": "Jupiter",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 1.898e27,
+      "radius_km": 71492.0,
+      "color": [0.82, 0.65, 0.45],
+      "obliquity_deg": 3.13,
+      "rotation_period_days": 0.41354,
+      "keplerian": {
+        "a": 5.20288700,
+        "e": 0.04838624,
+        "i": 1.30439695,
+        "Omega": 100.47390909,
+        "omega_tilde": 14.72847983,
+        "L": 34.39644051
+      },
+      "atmosphere": {
+        "color": [0.90, 0.72, 0.50],
+        "intensity": 0.32,
+        "scale": 1.25
+      }
+    },
 
-        {
-          "name": "Jupiter",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 1.898e27,
-          "radius_km": 71492.0,
-          "color": [0.82, 0.65, 0.45],
-          "obliquity_deg": 3.13,
-          "rotation_period_days": 0.41354,
-          "keplerian": {
-            "a": 5.20288700,
-            "e": 0.04838624,
-            "i": 1.30439695,
-            "Omega": 100.47390909,
-            "omega_tilde": 14.72847983,
-            "L": 34.39644051
-          },
-          "atmosphere": {
-            "color": [0.90, 0.72, 0.50],
-            "intensity": 0.32,
-            "scale": 1.25
-          }
-        },
+    {
+      "name": "Saturn",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 5.683e26,
+      "radius_km": 60268.0,
+      "color": [1.00, 0.90, 0.60],
+      "obliquity_deg": 26.73,
+      "rotation_period_days": 0.44401,
+      "keplerian": {
+        "a": 9.53667594,
+        "e": 0.05386179,
+        "i": 2.48599187,
+        "Omega": 113.66242448,
+        "omega_tilde": 92.59887831,
+        "L": 49.95424423
+      },
+      "atmosphere": {
+        "color": [0.90, 0.82, 0.62],
+        "intensity": 0.28,
+        "scale": 1.25
+      }
+    },
 
-        {
-          "name": "Saturn",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 5.683e26,
-          "radius_km": 60268.0,
-          "color": [1.00, 0.90, 0.60],
-          "obliquity_deg": 26.73,
-          "rotation_period_days": 0.44401,
-          "keplerian": {
-            "a": 9.53667594,
-            "e": 0.05386179,
-            "i": 2.48599187,
-            "Omega": 113.66242448,
-            "omega_tilde": 92.59887831,
-            "L": 49.95424423
-          },
-          "atmosphere": {
-            "color": [0.90, 0.82, 0.62],
-            "intensity": 0.28,
-            "scale": 1.25
-          }
-        },
+    {
+      "name": "Uranus",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 8.681e25,
+      "radius_km": 25559.0,
+      "color": [0.55, 0.82, 0.96],
+      "obliquity_deg": 97.77,
+      "rotation_period_days": 0.71833,
+      "keplerian": {
+        "a": 19.18916464,
+        "e": 0.04725744,
+        "i": 0.77263783,
+        "Omega": 74.01692503,
+        "omega_tilde": 170.95427630,
+        "L": 313.23810451
+      },
+      "atmosphere": {
+        "color": [0.60, 0.90, 1.00],
+        "intensity": 0.23,
+        "scale": 1.25
+      }
+    },
 
-        {
-          "name": "Uranus",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 8.681e25,
-          "radius_km": 25559.0,
-          "color": [0.55, 0.82, 0.96],
-          "obliquity_deg": 97.77,
-          "rotation_period_days": 0.71833,
-          "keplerian": {
-            "a": 19.18916464,
-            "e": 0.04725744,
-            "i": 0.77263783,
-            "Omega": 74.01692503,
-            "omega_tilde": 170.95427630,
-            "L": 313.23810451
-          },
-          "atmosphere": {
-            "color": [0.60, 0.90, 1.00],
-            "intensity": 0.23,
-            "scale": 1.25
-          }
-        },
+    {
+      "name": "Neptune",
+      "type": "planet",
+      "parent": "Sun",
+      "mass": 1.024e26,
+      "radius_km": 24764.0,
+      "color": [0.25, 0.38, 0.95],
+      "obliquity_deg": 28.32,
+      "rotation_period_days": 0.67125,
+      "keplerian": {
+        "a": 30.06992276,
+        "e": 0.00859048,
+        "i": 1.77004347,
+        "Omega": 131.78422574,
+        "omega_tilde": 44.96476227,
+        "L": -55.12002969
+      },
+      "atmosphere": {
+        "color": [0.30, 0.50, 1.00],
+        "intensity": 0.23,
+        "scale": 1.25
+      }
+    },
 
-        {
-          "name": "Neptune",
-          "type": "planet",
-          "parent": "Sun",
-          "mass": 1.024e26,
-          "radius_km": 24764.0,
-          "color": [0.25, 0.38, 0.95],
-          "obliquity_deg": 28.32,
-          "rotation_period_days": 0.67125,
-          "keplerian": {
-            "a": 30.06992276,
-            "e": 0.00859048,
-            "i": 1.77004347,
-            "Omega": 131.78422574,
-            "omega_tilde": 44.96476227,
-            "L": -55.12002969
-          },
-          "atmosphere": {
-            "color": [0.30, 0.50, 1.00],
-            "intensity": 0.23,
-            "scale": 1.25
-          }
-        },
+    // ----------------------------------------------------------------
+    // Dwarf planets — Solar System
+    // ----------------------------------------------------------------
+    {
+      "name": "Ceres",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 9.393e20,
+      "radius_km": 476.2,
+      "color": [0.72, 0.68, 0.64],
+      "keplerian": {
+        "a": 2.76969657,
+        "e": 0.07600902,
+        "i": 10.59407162,
+        "Omega": 80.30992285,
+        "omega_tilde": 73.11734054,
+        "L": 77.37209589
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Dwarf planets
-        // ----------------------------------------------------------------
-        {
-          "name": "Ceres",
-          "type": "dwarf_planet",
-          "parent": "Sun",
-          "mass": 9.393e20,
-          "radius_km": 476.2,
-          "color": [0.72, 0.68, 0.64],
-          "keplerian": {
-            "a": 2.76969657,
-            "e": 0.07600902,
-            "i": 10.59407162,
-            "Omega": 80.30992285,
-            "omega_tilde": 73.11734054,
-            "L": 77.37209589
-          }
-        },
+    {
+      "name": "Pluto",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 1.303e22,
+      "radius_km": 1188.3,
+      "color": [0.85, 0.78, 0.68],
+      "keplerian": {
+        "a": 39.48211675,
+        "e": 0.24882730,
+        "i": 17.14001206,
+        "Omega": 110.30393684,
+        "omega_tilde": 224.06891629,
+        "L": 238.92903833
+      }
+    },
 
-        {
-          "name": "Pluto",
-          "type": "dwarf_planet",
-          "parent": "Sun",
-          "mass": 1.303e22,
-          "radius_km": 1188.3,
-          "color": [0.85, 0.78, 0.68],
-          "keplerian": {
-            "a": 39.48211675,
-            "e": 0.24882730,
-            "i": 17.14001206,
-            "Omega": 110.30393684,
-            "omega_tilde": 224.06891629,
-            "L": 238.92903833
-          }
-        },
+    {
+      "name": "Eris",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 1.660e22,
+      "radius_km": 1163.0,
+      "color": [0.92, 0.92, 0.90],
+      "keplerian": {
+        "a": 67.6681,
+        "e": 0.44177,
+        "i": 44.0445,
+        "Omega": 35.9531,
+        "omega_tilde": 151.4305,
+        "L": 204.1574
+      }
+    },
 
-        {
-          "name": "Eris",
-          "type": "dwarf_planet",
-          "parent": "Sun",
-          "mass": 1.660e22,
-          "radius_km": 1163.0,
-          "color": [0.92, 0.92, 0.90],
-          "keplerian": {
-            "a": 67.6681,
-            "e": 0.44177,
-            "i": 44.0445,
-            "Omega": 35.9531,
-            "omega_tilde": 151.4305,
-            "L": 204.1574
-          }
-        },
+    {
+      "name": "Makemake",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 3.100e21,
+      "radius_km": 715.0,
+      "color": [0.88, 0.72, 0.62],
+      "keplerian": {
+        "a": 45.4302,
+        "e": 0.15586,
+        "i": 28.9633,
+        "Omega": 79.3812,
+        "omega_tilde": 296.0481,
+        "L": 41.8866
+      }
+    },
 
-        {
-          "name": "Makemake",
-          "type": "dwarf_planet",
-          "parent": "Sun",
-          "mass": 3.100e21,
-          "radius_km": 715.0,
-          "color": [0.88, 0.72, 0.62],
-          "keplerian": {
-            "a": 45.4302,
-            "e": 0.15586,
-            "i": 28.9633,
-            "Omega": 79.3812,
-            "omega_tilde": 296.0481,
-            "L": 41.8866
-          }
-        },
+    {
+      "name": "Haumea",
+      "type": "dwarf_planet",
+      "parent": "Sun",
+      "mass": 4.006e21,
+      "radius_km": 620.0,
+      "color": [0.90, 0.88, 0.88],
+      "keplerian": {
+        "a": 43.1355,
+        "e": 0.19510,
+        "i": 28.2137,
+        "Omega": 122.1030,
+        "omega_tilde": 240.1972,
+        "L": 202.6739
+      }
+    },
 
-        {
-          "name": "Haumea",
-          "type": "dwarf_planet",
-          "parent": "Sun",
-          "mass": 4.006e21,
-          "radius_km": 620.0,
-          "color": [0.90, 0.88, 0.88],
-          "keplerian": {
-            "a": 43.1355,
-            "e": 0.19510,
-            "i": 28.2137,
-            "Omega": 122.1030,
-            "omega_tilde": 240.1972,
-            "L": 202.6739
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Earth
+    // ----------------------------------------------------------------
+    {
+      "name": "Moon",
+      "type": "moon",
+      "parent": "Earth",
+      "mass": 7.342e22,
+      "radius_km": 1737.4,
+      "color": [0.85, 0.85, 0.85],
+      "obliquity_deg": 6.68,
+      "rotation_period_days": 27.321,
+      "moon_keplerian": {
+        "a_km": 384400.0,
+        "e": 0.0549,
+        "i_deg": 5.14,
+        "Omega_deg": 125.1,
+        "omega_deg": 318.1,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Earth
-        // ----------------------------------------------------------------
-        {
-          "name": "Moon",
-          "type": "moon",
-          "parent": "Earth",
-          "mass": 7.342e22,
-          "radius_km": 1737.4,
-          "color": [0.85, 0.85, 0.85],
-          "obliquity_deg": 6.68,
-          "rotation_period_days": 27.321,
-          "moon_keplerian": {
-            "a_km": 384400.0,
-            "e": 0.0549,
-            "i_deg": 5.14,
-            "Omega_deg": 125.1,
-            "omega_deg": 318.1,
-            "M0_deg": 0.0
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Mars
+    // ----------------------------------------------------------------
+    {
+      "name": "Phobos",
+      "type": "moon",
+      "parent": "Mars",
+      "mass": 1.066e16,
+      "radius_km": 11.3,
+      "color": [0.65, 0.60, 0.58],
+      "moon_keplerian": {
+        "a_km": 9376.0,
+        "e": 0.0151,
+        "i_deg": 1.08,
+        "Omega_deg": 0.0,
+        "omega_deg": 0.0,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Mars
-        // ----------------------------------------------------------------
-        {
-          "name": "Phobos",
-          "type": "moon",
-          "parent": "Mars",
-          "mass": 1.066e16,
-          "radius_km": 11.3,
-          "color": [0.65, 0.60, 0.58],
-          "moon_keplerian": {
-            "a_km": 9376.0,
-            "e": 0.0151,
-            "i_deg": 1.08,
-            "Omega_deg": 0.0,
-            "omega_deg": 0.0,
-            "M0_deg": 0.0
-          }
-        },
+    {
+      "name": "Deimos",
+      "type": "moon",
+      "parent": "Mars",
+      "mass": 1.476e15,
+      "radius_km": 6.2,
+      "color": [0.62, 0.58, 0.55],
+      "moon_keplerian": {
+        "a_km": 23458.0,
+        "e": 0.0002,
+        "i_deg": 1.79,
+        "Omega_deg": 54.5,
+        "omega_deg": 0.0,
+        "M0_deg": 120.0
+      }
+    },
 
-        {
-          "name": "Deimos",
-          "type": "moon",
-          "parent": "Mars",
-          "mass": 1.476e15,
-          "radius_km": 6.2,
-          "color": [0.62, 0.58, 0.55],
-          "moon_keplerian": {
-            "a_km": 23458.0,
-            "e": 0.0002,
-            "i_deg": 1.79,
-            "Omega_deg": 54.5,
-            "omega_deg": 0.0,
-            "M0_deg": 120.0
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Jupiter (Galilean)
+    // ----------------------------------------------------------------
+    {
+      "name": "Io",
+      "type": "moon",
+      "parent": "Jupiter",
+      "mass": 8.932e22,
+      "radius_km": 1821.6,
+      "color": [0.95, 0.85, 0.30],
+      "moon_keplerian": {
+        "a_km": 421800.0,
+        "e": 0.0041,
+        "i_deg": 3.13,
+        "Omega_deg": 0.0,
+        "omega_deg": 84.1,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Jupiter (Galilean)
-        // ----------------------------------------------------------------
-        {
-          "name": "Io",
-          "type": "moon",
-          "parent": "Jupiter",
-          "mass": 8.932e22,
-          "radius_km": 1821.6,
-          "color": [0.95, 0.85, 0.30],
-          "moon_keplerian": {
-            "a_km": 421800.0,
-            "e": 0.0041,
-            "i_deg": 3.13,
-            "Omega_deg": 0.0,
-            "omega_deg": 84.1,
-            "M0_deg": 0.0
-          }
-        },
+    {
+      "name": "Europa",
+      "type": "moon",
+      "parent": "Jupiter",
+      "mass": 4.800e22,
+      "radius_km": 1560.8,
+      "color": [0.80, 0.75, 0.70],
+      "moon_keplerian": {
+        "a_km": 671100.0,
+        "e": 0.0094,
+        "i_deg": 3.60,
+        "Omega_deg": 90.0,
+        "omega_deg": 0.0,
+        "M0_deg": 100.0
+      }
+    },
 
-        {
-          "name": "Europa",
-          "type": "moon",
-          "parent": "Jupiter",
-          "mass": 4.800e22,
-          "radius_km": 1560.8,
-          "color": [0.80, 0.75, 0.70],
-          "moon_keplerian": {
-            "a_km": 671100.0,
-            "e": 0.0094,
-            "i_deg": 3.60,
-            "Omega_deg": 90.0,
-            "omega_deg": 0.0,
-            "M0_deg": 100.0
-          }
-        },
+    {
+      "name": "Ganymede",
+      "type": "moon",
+      "parent": "Jupiter",
+      "mass": 1.482e23,
+      "radius_km": 2634.1,
+      "color": [0.75, 0.72, 0.65],
+      "moon_keplerian": {
+        "a_km": 1070400.0,
+        "e": 0.0013,
+        "i_deg": 3.30,
+        "Omega_deg": 45.0,
+        "omega_deg": 0.0,
+        "M0_deg": 200.0
+      }
+    },
 
-        {
-          "name": "Ganymede",
-          "type": "moon",
-          "parent": "Jupiter",
-          "mass": 1.482e23,
-          "radius_km": 2634.1,
-          "color": [0.75, 0.72, 0.65],
-          "moon_keplerian": {
-            "a_km": 1070400.0,
-            "e": 0.0013,
-            "i_deg": 3.30,
-            "Omega_deg": 45.0,
-            "omega_deg": 0.0,
-            "M0_deg": 200.0
-          }
-        },
+    {
+      "name": "Callisto",
+      "type": "moon",
+      "parent": "Jupiter",
+      "mass": 1.076e23,
+      "radius_km": 2410.3,
+      "color": [0.55, 0.50, 0.48],
+      "moon_keplerian": {
+        "a_km": 1882700.0,
+        "e": 0.0074,
+        "i_deg": 3.30,
+        "Omega_deg": 20.0,
+        "omega_deg": 0.0,
+        "M0_deg": 300.0
+      }
+    },
 
-        {
-          "name": "Callisto",
-          "type": "moon",
-          "parent": "Jupiter",
-          "mass": 1.076e23,
-          "radius_km": 2410.3,
-          "color": [0.55, 0.50, 0.48],
-          "moon_keplerian": {
-            "a_km": 1882700.0,
-            "e": 0.0074,
-            "i_deg": 3.30,
-            "Omega_deg": 20.0,
-            "omega_deg": 0.0,
-            "M0_deg": 300.0
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Saturn
+    // ----------------------------------------------------------------
+    {
+      "name": "Mimas",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 3.750e19,
+      "radius_km": 198.2,
+      "color": [0.80, 0.78, 0.78],
+      "moon_keplerian": {
+        "a_km": 185539.0,
+        "e": 0.0196,
+        "i_deg": 28.3,
+        "Omega_deg": 0.0,
+        "omega_deg": 0.0,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Saturn
-        // ----------------------------------------------------------------
-        {
-          "name": "Mimas",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 3.750e19,
-          "radius_km": 198.2,
-          "color": [0.80, 0.78, 0.78],
-          "moon_keplerian": {
-            "a_km": 185539.0,
-            "e": 0.0196,
-            "i_deg": 28.3,
-            "Omega_deg": 0.0,
-            "omega_deg": 0.0,
-            "M0_deg": 0.0
-          }
-        },
+    {
+      "name": "Enceladus",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 1.080e20,
+      "radius_km": 252.1,
+      "color": [0.95, 0.95, 0.95],
+      "moon_keplerian": {
+        "a_km": 238020.0,
+        "e": 0.0047,
+        "i_deg": 26.7,
+        "Omega_deg": 60.0,
+        "omega_deg": 0.0,
+        "M0_deg": 60.0
+      }
+    },
 
-        {
-          "name": "Enceladus",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 1.080e20,
-          "radius_km": 252.1,
-          "color": [0.95, 0.95, 0.95],
-          "moon_keplerian": {
-            "a_km": 238020.0,
-            "e": 0.0047,
-            "i_deg": 26.7,
-            "Omega_deg": 60.0,
-            "omega_deg": 0.0,
-            "M0_deg": 60.0
-          }
-        },
+    {
+      "name": "Tethys",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 6.174e20,
+      "radius_km": 531.1,
+      "color": [0.82, 0.80, 0.78],
+      "moon_keplerian": {
+        "a_km": 294619.0,
+        "e": 0.0001,
+        "i_deg": 27.8,
+        "Omega_deg": 120.0,
+        "omega_deg": 0.0,
+        "M0_deg": 120.0
+      }
+    },
 
-        {
-          "name": "Tethys",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 6.174e20,
-          "radius_km": 531.1,
-          "color": [0.82, 0.80, 0.78],
-          "moon_keplerian": {
-            "a_km": 294619.0,
-            "e": 0.0001,
-            "i_deg": 27.8,
-            "Omega_deg": 120.0,
-            "omega_deg": 0.0,
-            "M0_deg": 120.0
-          }
-        },
+    {
+      "name": "Dione",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 1.096e21,
+      "radius_km": 561.4,
+      "color": [0.80, 0.78, 0.75],
+      "moon_keplerian": {
+        "a_km": 377396.0,
+        "e": 0.0022,
+        "i_deg": 26.8,
+        "Omega_deg": 180.0,
+        "omega_deg": 0.0,
+        "M0_deg": 180.0
+      }
+    },
 
-        {
-          "name": "Dione",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 1.096e21,
-          "radius_km": 561.4,
-          "color": [0.80, 0.78, 0.75],
-          "moon_keplerian": {
-            "a_km": 377396.0,
-            "e": 0.0022,
-            "i_deg": 26.8,
-            "Omega_deg": 180.0,
-            "omega_deg": 0.0,
-            "M0_deg": 180.0
-          }
-        },
+    {
+      "name": "Rhea",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 2.307e21,
+      "radius_km": 763.8,
+      "color": [0.78, 0.75, 0.72],
+      "moon_keplerian": {
+        "a_km": 527108.0,
+        "e": 0.0013,
+        "i_deg": 27.1,
+        "Omega_deg": 240.0,
+        "omega_deg": 0.0,
+        "M0_deg": 240.0
+      }
+    },
 
-        {
-          "name": "Rhea",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 2.307e21,
-          "radius_km": 763.8,
-          "color": [0.78, 0.75, 0.72],
-          "moon_keplerian": {
-            "a_km": 527108.0,
-            "e": 0.0013,
-            "i_deg": 27.1,
-            "Omega_deg": 240.0,
-            "omega_deg": 0.0,
-            "M0_deg": 240.0
-          }
-        },
+    {
+      "name": "Titan",
+      "type": "moon",
+      "parent": "Saturn",
+      "mass": 1.345e23,
+      "radius_km": 2574.7,
+      "color": [0.85, 0.70, 0.45],
+      "moon_keplerian": {
+        "a_km": 1221870.0,
+        "e": 0.0288,
+        "i_deg": 27.1,
+        "Omega_deg": 300.0,
+        "omega_deg": 0.0,
+        "M0_deg": 300.0
+      },
+      "atmosphere": {
+        "color": [0.75, 0.50, 0.20],
+        "intensity": 0.78,
+        "scale": 1.45
+      }
+    },
 
-        {
-          "name": "Titan",
-          "type": "moon",
-          "parent": "Saturn",
-          "mass": 1.345e23,
-          "radius_km": 2574.7,
-          "color": [0.85, 0.70, 0.45],
-          "moon_keplerian": {
-            "a_km": 1221870.0,
-            "e": 0.0288,
-            "i_deg": 27.1,
-            "Omega_deg": 300.0,
-            "omega_deg": 0.0,
-            "M0_deg": 300.0
-          },
-          "atmosphere": {
-            "color": [0.75, 0.50, 0.20],
-            "intensity": 0.78,
-            "scale": 1.45
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Uranus
+    // ----------------------------------------------------------------
+    {
+      "name": "Miranda",
+      "type": "moon",
+      "parent": "Uranus",
+      "mass": 6.590e19,
+      "radius_km": 235.8,
+      "color": [0.70, 0.68, 0.65],
+      "moon_keplerian": {
+        "a_km": 129390.0,
+        "e": 0.0013,
+        "i_deg": 102.1,
+        "Omega_deg": 0.0,
+        "omega_deg": 0.0,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Uranus
-        // ----------------------------------------------------------------
-        {
-          "name": "Miranda",
-          "type": "moon",
-          "parent": "Uranus",
-          "mass": 6.590e19,
-          "radius_km": 235.8,
-          "color": [0.70, 0.68, 0.65],
-          "moon_keplerian": {
-            "a_km": 129390.0,
-            "e": 0.0013,
-            "i_deg": 102.1,
-            "Omega_deg": 0.0,
-            "omega_deg": 0.0,
-            "M0_deg": 0.0
-          }
-        },
+    {
+      "name": "Ariel",
+      "type": "moon",
+      "parent": "Uranus",
+      "mass": 1.353e21,
+      "radius_km": 578.9,
+      "color": [0.72, 0.70, 0.68],
+      "moon_keplerian": {
+        "a_km": 191020.0,
+        "e": 0.0012,
+        "i_deg": 97.8,
+        "Omega_deg": 90.0,
+        "omega_deg": 0.0,
+        "M0_deg": 72.0
+      }
+    },
 
-        {
-          "name": "Ariel",
-          "type": "moon",
-          "parent": "Uranus",
-          "mass": 1.353e21,
-          "radius_km": 578.9,
-          "color": [0.72, 0.70, 0.68],
-          "moon_keplerian": {
-            "a_km": 191020.0,
-            "e": 0.0012,
-            "i_deg": 97.8,
-            "Omega_deg": 90.0,
-            "omega_deg": 0.0,
-            "M0_deg": 72.0
-          }
-        },
+    {
+      "name": "Umbriel",
+      "type": "moon",
+      "parent": "Uranus",
+      "mass": 1.172e21,
+      "radius_km": 584.7,
+      "color": [0.50, 0.48, 0.48],
+      "moon_keplerian": {
+        "a_km": 266300.0,
+        "e": 0.0039,
+        "i_deg": 97.9,
+        "Omega_deg": 180.0,
+        "omega_deg": 0.0,
+        "M0_deg": 144.0
+      }
+    },
 
-        {
-          "name": "Umbriel",
-          "type": "moon",
-          "parent": "Uranus",
-          "mass": 1.172e21,
-          "radius_km": 584.7,
-          "color": [0.50, 0.48, 0.48],
-          "moon_keplerian": {
-            "a_km": 266300.0,
-            "e": 0.0039,
-            "i_deg": 97.9,
-            "Omega_deg": 180.0,
-            "omega_deg": 0.0,
-            "M0_deg": 144.0
-          }
-        },
+    {
+      "name": "Titania",
+      "type": "moon",
+      "parent": "Uranus",
+      "mass": 3.527e21,
+      "radius_km": 788.4,
+      "color": [0.68, 0.65, 0.62],
+      "moon_keplerian": {
+        "a_km": 435910.0,
+        "e": 0.0011,
+        "i_deg": 97.8,
+        "Omega_deg": 270.0,
+        "omega_deg": 0.0,
+        "M0_deg": 216.0
+      }
+    },
 
-        {
-          "name": "Titania",
-          "type": "moon",
-          "parent": "Uranus",
-          "mass": 3.527e21,
-          "radius_km": 788.4,
-          "color": [0.68, 0.65, 0.62],
-          "moon_keplerian": {
-            "a_km": 435910.0,
-            "e": 0.0011,
-            "i_deg": 97.8,
-            "Omega_deg": 270.0,
-            "omega_deg": 0.0,
-            "M0_deg": 216.0
-          }
-        },
+    {
+      "name": "Oberon",
+      "type": "moon",
+      "parent": "Uranus",
+      "mass": 3.014e21,
+      "radius_km": 761.4,
+      "color": [0.62, 0.58, 0.55],
+      "moon_keplerian": {
+        "a_km": 583520.0,
+        "e": 0.0014,
+        "i_deg": 97.9,
+        "Omega_deg": 45.0,
+        "omega_deg": 0.0,
+        "M0_deg": 288.0
+      }
+    },
 
-        {
-          "name": "Oberon",
-          "type": "moon",
-          "parent": "Uranus",
-          "mass": 3.014e21,
-          "radius_km": 761.4,
-          "color": [0.62, 0.58, 0.55],
-          "moon_keplerian": {
-            "a_km": 583520.0,
-            "e": 0.0014,
-            "i_deg": 97.9,
-            "Omega_deg": 45.0,
-            "omega_deg": 0.0,
-            "M0_deg": 288.0
-          }
-        },
+    // ----------------------------------------------------------------
+    // Moons — Neptune
+    // ----------------------------------------------------------------
+    {
+      "name": "Triton",
+      "type": "moon",
+      "parent": "Neptune",
+      "mass": 2.139e22,
+      "radius_km": 1353.4,
+      "color": [0.78, 0.75, 0.82],
+      "moon_keplerian": {
+        "a_km": 354759.0,
+        "e": 0.000016,
+        "i_deg": 156.885,
+        "Omega_deg": 177.0,
+        "omega_deg": 0.0,
+        "M0_deg": 0.0
+      }
+    },
 
-        // ----------------------------------------------------------------
-        // Moons — Neptune
-        // ----------------------------------------------------------------
-        {
-          "name": "Triton",
-          "type": "moon",
-          "parent": "Neptune",
-          "mass": 2.139e22,
-          "radius_km": 1353.4,
-          "color": [0.78, 0.75, 0.82],
-          "moon_keplerian": {
-            "a_km": 354759.0,
-            "e": 0.000016,
-            "i_deg": 156.885,
-            "Omega_deg": 177.0,
-            "omega_deg": 0.0,
-            "M0_deg": 0.0
-          }
-        }
+    // ================================================================
+    // Alpha Centauri A — 4.244 ly
+    // G2V; primary of the Alpha Centauri AB binary.
+    // Proper motion: radial ~-22 km/s (approaching), transverse ~+4 km/s.
+    // ================================================================
+    {
+      "name": "Alpha Cen A",
+      "type": "star",
+      "pos_ly": [3.994, -0.914, -1.328],
+      "mass": 2.188e30,
+      "radius_km": 855300.0,
+      "color": [1.0, 0.88, 0.55],
+      "obliquity_deg": 0.0,
+      "rotation_period_days": 22.0,
+      "velocity_km_s": [-22.2, 4.1, 2.9]
+    },
 
-      ]
+    // ================================================================
+    // Proxima Centauri — 4.243 ly (slightly closer than Alpha Cen AB;
+    // gravitationally bound to the AB pair ~0.21 ly away).
+    // M5.5Ve red dwarf with confirmed rocky planet Proxima b.
+    // ================================================================
+    {
+      "name": "Proxima Cen",
+      "type": "star",
+      "pos_ly": [3.818, -0.876, -1.271],
+      "mass": 2.446e29,
+      "radius_km": 107300.0,
+      "color": [1.0, 0.38, 0.12],
+      "obliquity_deg": 0.0,
+      "rotation_period_days": 82.6,
+      "velocity_km_s": [-22.2, 4.1, 2.9]
+    },
+
+    // Proxima b — confirmed rocky planet, ~1.07 Me minimum mass,
+    // 11.186-day orbit at 0.0485 AU, habitable-zone candidate.
+    {
+      "name": "Proxima b",
+      "type": "planet",
+      "parent": "Proxima Cen",
+      "mass": 6.38e24,
+      "radius_km": 7160.0,
+      "color": [0.42, 0.55, 0.38],
+      "keplerian": {
+        "a": 0.04856,
+        "e": 0.0,
+        "i": 0.0,
+        "Omega": 0.0,
+        "omega_tilde": 0.0,
+        "L": 0.0
+      }
     }
+
   ],
 
   // ----------------------------------------------------------------
@@ -676,7 +724,6 @@
     },
     {
       // Uranus — obliquity 97.77°, rings nearly perpendicular to ecliptic
-      // 9 classical narrow rings (6,5,4,α,β,η,γ,δ,ε); albedo ~0.03
       "body":              "Uranus",
       "shader_type":       "generic",
       "n_full":            8000,

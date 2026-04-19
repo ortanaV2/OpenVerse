@@ -79,13 +79,14 @@ void trails_render(const float vp[16])
 {
     if (!s_shader) return;
 
-    /* Distance from camera to star (body 0) — controls LOD fade.
+    /* Distance from camera to nearest star — controls LOD fade.
      * Computed in render units (AU).  Returns early if trails are fully faded. */
     float trail_fade = 1.0f;
     if (g_nbodies > 0) {
-        float sdx = (float)(g_cam.pos[0] - g_bodies[0].pos[0] * RS);
-        float sdy = (float)(g_cam.pos[1] - g_bodies[0].pos[1] * RS);
-        float sdz = (float)(g_cam.pos[2] - g_bodies[0].pos[2] * RS);
+        int star = nearest_star_idx();
+        float sdx = (float)(g_cam.pos[0] - g_bodies[star].pos[0] * RS);
+        float sdy = (float)(g_cam.pos[1] - g_bodies[star].pos[1] * RS);
+        float sdz = (float)(g_cam.pos[2] - g_bodies[star].pos[2] * RS);
         float dist = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
         trail_fade = 1.0f - (dist - SYS_TRAIL_FADE_START)
                           / (SYS_TRAIL_FADE_END - SYS_TRAIL_FADE_START);
