@@ -30,6 +30,11 @@ static int is_satellite(int i) {
     return g_bodies[i].parent >= 0 && !g_bodies[g_bodies[i].parent].is_star;
 }
 
+/* Any explicit parent-child pair is integrated at the inner cadence. */
+static int has_fast_parent(int i) {
+    return g_bodies[i].parent >= 0;
+}
+
 /* ── slow forces: primary-primary + non-parent tidal on satellites ───── */
 static void compute_acc_slow(void) {
     int i, j;
@@ -41,8 +46,8 @@ static void compute_acc_slow(void) {
             /* skip satellite-satellite (negligible and expensive) */
             if (is_satellite(i) && is_satellite(j)) continue;
             /* skip parent-satellite pair — handled by fast forces */
-            if (is_satellite(j) && g_bodies[j].parent == i) continue;
-            if (is_satellite(i) && g_bodies[i].parent == j) continue;
+            if (has_fast_parent(j) && g_bodies[j].parent == i) continue;
+            if (has_fast_parent(i) && g_bodies[i].parent == j) continue;
 
             double dx = g_bodies[j].pos[0] - g_bodies[i].pos[0];
             double dy = g_bodies[j].pos[1] - g_bodies[i].pos[1];
@@ -75,7 +80,7 @@ static void compute_acc_fast(void) {
         g_bodies[i].fast_acc[2] = 0.0;
 
     for (i = 0; i < g_nbodies; i++) {
-        if (!is_satellite(i)) continue;
+        if (!has_fast_parent(i)) continue;
         int p = g_bodies[i].parent;
 
         double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
