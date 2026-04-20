@@ -75,6 +75,47 @@ void trails_gl_init(void)
     }
 }
 
+void trails_add_body(int body_idx)
+{
+    if (!s_shader || body_idx < 0 || body_idx >= MAX_BODIES) return;
+    if (body_idx < s_n) return;
+
+    int new_n = body_idx + 1;
+    GLuint *new_vao = (GLuint*)malloc(new_n * sizeof(GLuint));
+    GLuint *new_vbo = (GLuint*)malloc(new_n * sizeof(GLuint));
+    int *new_head = (int*)malloc(new_n * sizeof(int));
+    int *new_count = (int*)malloc(new_n * sizeof(int));
+    if (!new_vao || !new_vbo || !new_head || !new_count) {
+        free(new_vao); free(new_vbo); free(new_head); free(new_count);
+        return;
+    }
+    if (s_n > 0) {
+        memcpy(new_vao, s_vao, s_n * sizeof(GLuint));
+        memcpy(new_vbo, s_vbo, s_n * sizeof(GLuint));
+        memcpy(new_head, s_last_head, s_n * sizeof(int));
+        memcpy(new_count, s_last_count, s_n * sizeof(int));
+    }
+    free(s_vao); free(s_vbo); free(s_last_head); free(s_last_count);
+    s_vao = new_vao;
+    s_vbo = new_vbo;
+    s_last_head = new_head;
+    s_last_count = new_count;
+
+    for (int i = s_n; i < new_n; i++) {
+        s_last_head[i] = 0;
+        s_last_count[i] = 0;
+        s_vao[i] = gl_vao_create();
+        s_vbo[i] = gl_vbo_create((TRAIL_LEN + 1) * 3 * sizeof(float),
+                                 NULL, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                              3 * sizeof(float), (void*)0);
+        glBindVertexArray(0);
+    }
+
+    s_n = new_n;
+}
+
 void trails_render(const float vp[16])
 {
     if (!s_shader) return;

@@ -30,6 +30,7 @@
 #include "rings.h"
 #include "asteroids.h"
 #include "ui.h"
+#include "build.h"
 
 /* ------------------------------------------------------------------ globals */
 static SDL_Window   *s_win = NULL;
@@ -143,6 +144,12 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_q: s_key_q = 1; break;
         case SDLK_e: s_key_e = 1; break;
         case SDLK_r: cam_reset(); break;
+        case SDLK_b:
+            if (!e->key.repeat) build_toggle();
+            break;
+        case SDLK_TAB:
+            build_set_tab_held(1);
+            break;
         case SDLK_t:
             s_warp = !s_warp;
             g_warp = s_warp;
@@ -161,6 +168,10 @@ static void handle_event(const SDL_Event *e, float dt) {
             break;
         case SDLK_SPACE: g_paused = !g_paused; break;
         case SDLK_ESCAPE:
+            if (g_build_mode) {
+                build_toggle();
+                break;
+            }
             if (s_freelook) {
                 s_freelook = 0;
                 SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -190,10 +201,15 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_d: s_key_d = 0; break;
         case SDLK_q: s_key_q = 0; break;
         case SDLK_e: s_key_e = 0; break;
+        case SDLK_TAB: build_set_tab_held(0); break;
         }
         break;
 
     case SDL_MOUSEBUTTONDOWN:
+        if (g_build_mode && e->button.button == SDL_BUTTON_LEFT) {
+            build_place_current();
+            break;
+        }
         if (e->button.button == SDL_BUTTON_LEFT && !s_freelook) {
             s_freelook = 1;
             SDL_SetRelativeMouseMode(SDL_TRUE);
@@ -212,6 +228,10 @@ static void handle_event(const SDL_Event *e, float dt) {
         break;
 
     case SDL_MOUSEWHEEL:
+        if (g_build_mode && g_build_tab_held) {
+            build_scroll(e->wheel.y);
+            break;
+        }
         g_cam.speed *= (e->wheel.y > 0) ? 1.3f : (1.0f / 1.3f);
         if (s_warp) {
             /* Warp range: 200 AU/s (0.003 ly/s) … 63 241 AU/s (1 ly/s) */
@@ -269,6 +289,7 @@ int main(int argc, char **argv) {
     asteroids_init("assets/universe.json");
     labels_init();
     ui_init();
+    build_init();
 
     /* Trail warm-up: pre-simulate 2 years using RESPA.
      * 730 outer steps × 50 inner steps = 36 500 inner steps total —

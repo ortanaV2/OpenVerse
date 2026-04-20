@@ -10,6 +10,8 @@
 #include "ui.h"
 #include "camera.h"
 #include "physics.h"
+#include "build.h"
+#include "body.h"
 #include "gl_utils.h"
 #include <math.h>
 #include <stdio.h>
@@ -39,10 +41,18 @@ static GLint  s_loc_tex     = -1;
 static TTF_Font *s_font = NULL;
 
 /* ------------------------------------------------------------------ text cache */
-typedef struct { GLuint tex; int w, h; char str[64]; } TextCache;
+typedef struct {
+    GLuint tex;
+    int w, h;
+    char str[64];
+    SDL_Color col;
+} TextCache;
 static TextCache s_tc_move = {0};
 static TextCache s_tc_sim  = {0};
 static TextCache s_tc_fps  = {0};
+static TextCache s_tc_nearest = {0};
+static TextCache s_tc_build_title = {0};
+static TextCache s_tc_build_items[8];
 
 /* ------------------------------------------------------------------ FPS smoothing */
 /* Exponential moving average over ~30 frames, updated every UI frame.
@@ -87,12 +97,68 @@ static GLuint surf_to_tex(SDL_Surface *surf, int *w, int *h) {
 
 /* Re-render text texture only when the string changes */
 static void update_text(TextCache *tc, const char *str, SDL_Color col) {
-    if (strcmp(tc->str, str) == 0) return;
+    if (strcmp(tc->str, str) == 0 &&
+        tc->col.r == col.r && tc->col.g == col.g &&
+        tc->col.b == col.b && tc->col.a == col.a) return;
     strncpy(tc->str, str, 63);
     tc->str[63] = '\0';
+    tc->col = col;
     if (tc->tex) { glDeleteTextures(1, &tc->tex); tc->tex = 0; }
     SDL_Surface *surf = TTF_RenderText_Blended(s_font, str, col);
     if (surf) tc->tex = surf_to_tex(surf, &tc->w, &tc->h);
+}
+
+static void format_distance(double au, char *buf, size_t n)
+{
+    if (au < 0.001)
+        snprintf(buf, n, "%.0f km", au * AU / 1000.0);
+    else if (au < 1.0)
+        snprintf(buf, n, "%.4f AU", au);
+    else if (au < 1000.0)
+        snprintf(buf, n, "%.2f AU", au);
+    else
+        snprintf(buf, n, "%.3f ly", au / 63241.0);
+}
+
+static void nearest_body_distance_string(char *buf, size_t n)
+{
+    int best = -1;
+    double best_d = 1e300;
+
+    for (int i = 0; i < g_nbodies; i++) {
+        double dx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
+        double dy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
+        double dz = g_bodies[i].pos[2] * RS - g_cam.pos[2];
+        double d = sqrt(dx*dx + dy*dy + dz*dz);
+        if (d < best_d) {
+            best_d = d;
+            best = i;
+        }
+    }
+
+    if (best >= 0 && best_d > 1000.0) {
+        best = -1;
+        best_d = 1e300;
+        for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].is_star) continue;
+            double dx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
+            double dy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
+            double dz = g_bodies[i].pos[2] * RS - g_cam.pos[2];
+            double d = sqrt(dx*dx + dy*dy + dz*dz);
+            if (d < best_d) {
+                best_d = d;
+                best = i;
+            }
+        }
+    }
+
+    if (best < 0) {
+        snprintf(buf, n, "nearest --");
+    } else {
+        char dist[32];
+        format_distance(best_d, dist, sizeof(dist));
+        snprintf(buf, n, "%.31s  %.28s", g_bodies[best].name, dist);
+    }
 }
 
 /* Upload 2 triangles and draw */
@@ -123,6 +189,52 @@ static void draw_tex(TextCache *tc, float x, float y, float h) {
     glUniform4f(s_loc_color, 1, 1, 1, 1);
     glBindTexture(GL_TEXTURE_2D, tc->tex);
     draw_quad(x, y, w, h);
+}
+
+static void draw_build_bar(float W)
+{
+    if (!g_build_mode) return;
+
+    const float H = 72.0f;
+    const float Y = (float)WIN_H - H;
+    const float PAD = 14.0f;
+    const float ITEM_W = 112.0f;
+    const float ITEM_H = 42.0f;
+    const float GAP = 8.0f;
+    int n = build_preset_count();
+    if (n > 8) n = 8;
+
+    SDL_Color white = {255, 255, 255, 230};
+    update_text(&s_tc_build_title,
+                g_build_tab_held ? "BUILD MODE  |  scroll to select" : "BUILD MODE  |  hold TAB and scroll",
+                white);
+    draw_tex(&s_tc_build_title, PAD, (float)WIN_H - 18.0f, 12.0f);
+
+    float total_w = n * ITEM_W + (n - 1) * GAP;
+    float x = (W - total_w) * 0.5f;
+    int selected = build_selected_index();
+
+    for (int i = 0; i < n; i++) {
+        const BuildPreset *p = build_preset_at(i);
+        if (!p) continue;
+        float item_y = Y + 24.0f;
+        int active = (i == selected);
+        draw_rect(x, item_y, ITEM_W, ITEM_H,
+                  active ? 0.18f : 1.0f,
+                  active ? 0.18f : 1.0f,
+                  active ? 0.18f : 1.0f,
+                  active ? 1.0f : 0.85f);
+        draw_rect(x, item_y, ITEM_W, 6.0f, p->col[0], p->col[1], p->col[2], 1.0f);
+        SDL_Color item_col = active
+                           ? (SDL_Color){255, 255, 255, 255}
+                           : (SDL_Color){0, 0, 0, 255};
+        update_text(&s_tc_build_items[i], p->name, item_col);
+        if (s_tc_build_items[i].tex) {
+            float tw = 12.0f * (float)s_tc_build_items[i].w / (float)s_tc_build_items[i].h;
+            draw_tex(&s_tc_build_items[i], x + (ITEM_W - tw) * 0.5f, item_y + 16.0f, 12.0f);
+        }
+        x += ITEM_W + GAP;
+    }
 }
 
 /* ------------------------------------------------------------------ public */
@@ -217,10 +329,14 @@ void ui_render(void) {
     char fps_str[32];
     snprintf(fps_str, sizeof(fps_str), "%.0f fps", (double)s_fps_smooth);
 
+    char nearest_str[64];
+    nearest_body_distance_string(nearest_str, sizeof(nearest_str));
+
     SDL_Color white = {255, 255, 255, 220};
     update_text(&s_tc_move, mv_str, white);
     update_text(&s_tc_sim,  ss_str, white);
     update_text(&s_tc_fps,  fps_str, white);
+    update_text(&s_tc_nearest, nearest_str, white);
 
     /* ---- layout ---- */
     const float BH   = (float)BAR_H;
@@ -261,8 +377,14 @@ void ui_render(void) {
     if (s_tc_fps.tex) {
         const float MARGIN = 12.0f;
         float tw = TH * (float)s_tc_fps.w / (float)s_tc_fps.h;
-        draw_tex(&s_tc_fps, W - tw - MARGIN, TY, TH);
+        draw_tex(&s_tc_fps, W - tw - MARGIN, 8.0f, TH);
     }
+
+    if (s_tc_nearest.tex) {
+        draw_tex(&s_tc_nearest, BX, TY, TH);
+    }
+
+    draw_build_bar(W);
 
     /* ---- restore ---- */
     glBindVertexArray(0);
@@ -275,6 +397,10 @@ void ui_shutdown(void) {
     if (s_tc_move.tex) glDeleteTextures(1, &s_tc_move.tex);
     if (s_tc_sim.tex)  glDeleteTextures(1, &s_tc_sim.tex);
     if (s_tc_fps.tex)  glDeleteTextures(1, &s_tc_fps.tex);
+    if (s_tc_nearest.tex) glDeleteTextures(1, &s_tc_nearest.tex);
+    if (s_tc_build_title.tex) glDeleteTextures(1, &s_tc_build_title.tex);
+    for (int i = 0; i < 8; i++)
+        if (s_tc_build_items[i].tex) glDeleteTextures(1, &s_tc_build_items[i].tex);
     if (s_vbo)  glDeleteBuffers(1, &s_vbo);
     if (s_vao)  glDeleteVertexArrays(1, &s_vao);
     if (s_shader) glDeleteProgram(s_shader);
