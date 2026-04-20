@@ -31,6 +31,7 @@ uniform vec3  u_cam_up;
 uniform vec3  u_cam_fwd;
 uniform float u_fov_tan;
 uniform float u_aspect;
+uniform vec2  u_screen;
 
 uniform vec3  u_sun_rel;         /* sun − centre (AU)                   */
 uniform vec3  u_atm_color;
@@ -43,7 +44,7 @@ void main() {
     if (dot(v_uv, v_uv) > 1.0) discard;
 
     /* Per-pixel ray direction — identical formula to phong.frag */
-    vec2 ndc     = gl_FragCoord.xy / vec2(u_aspect * 360.0, 360.0) - 1.0;
+    vec2 ndc     = (gl_FragCoord.xy / (u_screen * 0.5)) - 1.0;
     vec3 ray_dir = normalize(u_cam_fwd
                            + u_cam_right * (ndc.x * u_aspect * u_fov_tan)
                            + u_cam_up    * (ndc.y * u_fov_tan));

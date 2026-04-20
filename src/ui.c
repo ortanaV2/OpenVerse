@@ -22,7 +22,7 @@
 #define BAR_W_FRAC    0.5f    /* fraction of screen width           */
 #define BAR_TOP       12.0f   /* distance from top of screen        */
 #define TEXT_GAP      6.0f    /* gap between bar bottom and text    */
-#define FONT_SIZE     12
+#define FONT_SIZE     14
 
 /* Camera speed range (AU / real-second) */
 #define CAM_MIN       0.00001f
@@ -208,7 +208,7 @@ static void draw_build_bar(float W)
     update_text(&s_tc_build_title,
                 g_build_tab_held ? "BUILD MODE  |  scroll to select" : "BUILD MODE  |  hold TAB and scroll",
                 white);
-    draw_tex(&s_tc_build_title, PAD, (float)WIN_H - 18.0f, 12.0f);
+    draw_tex(&s_tc_build_title, PAD, (float)WIN_H - (FONT_SIZE + 6.0f), (float)FONT_SIZE);
 
     float total_w = n * ITEM_W + (n - 1) * GAP;
     float x = (W - total_w) * 0.5f;
@@ -230,8 +230,8 @@ static void draw_build_bar(float W)
                            : (SDL_Color){0, 0, 0, 255};
         update_text(&s_tc_build_items[i], p->name, item_col);
         if (s_tc_build_items[i].tex) {
-            float tw = 12.0f * (float)s_tc_build_items[i].w / (float)s_tc_build_items[i].h;
-            draw_tex(&s_tc_build_items[i], x + (ITEM_W - tw) * 0.5f, item_y + 16.0f, 12.0f);
+            float tw = (float)FONT_SIZE * (float)s_tc_build_items[i].w / (float)s_tc_build_items[i].h;
+            draw_tex(&s_tc_build_items[i], x + (ITEM_W - tw) * 0.5f, item_y + 15.0f, (float)FONT_SIZE);
         }
         x += ITEM_W + GAP;
     }
@@ -351,6 +351,7 @@ void ui_render(void) {
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUseProgram(s_shader);
+    glUniform2f(s_loc_screen, (float)WIN_W, (float)WIN_H);
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);

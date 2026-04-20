@@ -72,6 +72,7 @@ make
 | Mouse | Look around |
 | Scroll | Camera speed / warp speed |
 | T | Toggle warp mode |
+| F11 / Alt+Enter | Toggle fullscreen |
 | `+` / `-` | Simulation speed up / down |
 | Space | Pause / resume |
 | R | Reset camera near the Sun, looking at the Sun |

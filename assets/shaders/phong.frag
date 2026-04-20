@@ -35,6 +35,7 @@ uniform vec3  u_cam_up;
 uniform vec3  u_cam_fwd;
 uniform float u_fov_tan;
 uniform float u_aspect;
+uniform vec2  u_screen;
 
 uniform float u_rotation;     /* body rotation angle, radians           */
 uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
@@ -173,7 +174,7 @@ vec3 surface_color(vec3 NL) {
 
 void main() {
     /* ---- per-pixel ray ------------------------------------------------ */
-    vec2 ndc    = gl_FragCoord.xy / vec2(u_aspect * 360.0, 360.0) - 1.0;
+    vec2 ndc    = (gl_FragCoord.xy / (u_screen * 0.5)) - 1.0;
     vec3 ray_dir = normalize(u_cam_fwd
                            + u_cam_right * (ndc.x * u_aspect * u_fov_tan)
                            + u_cam_up    * (ndc.y * u_fov_tan));

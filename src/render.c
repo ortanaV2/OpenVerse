@@ -39,6 +39,7 @@ static GLint  s_sp_sun_rel     = -1;   /* sun - center, double-precision diff */
 static GLint  s_sp_cam_fwd     = -1;
 static GLint  s_sp_fov_tan     = -1;
 static GLint  s_sp_aspect      = -1;
+static GLint  s_sp_screen      = -1;
 static GLint  s_sp_color       = -1;
 static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
@@ -77,6 +78,8 @@ static GLint  s_at_planet_r  = -1;
 static GLint  s_at_sun_rel   = -1;
 static GLint  s_at_color     = -1;
 static GLint  s_at_intensity = -1;
+static GLint  s_at_aspect    = -1;
+static GLint  s_at_screen    = -1;
 
 /* Atmosphere data is now stored per-body in g_bodies[i].atm_color/intensity/scale,
  * populated by universe_load() from assets/universe.json.
@@ -117,6 +120,8 @@ static GLint  s_build_ui_color = -1;
 static GLint  s_build_ui_use_tex = -1;
 static GLint  s_build_ui_tex = -1;
 static TTF_Font *s_build_font = NULL;
+
+#define BUILD_UI_FONT_SIZE 14.0f
 
 typedef struct {
     GLuint tex;
@@ -275,6 +280,20 @@ static float body_point_star_glare_visibility(int body_idx) {
     return (float)visibility;
 }
 
+static float s_dot_overlap_alpha[MAX_BODIES];
+
+static float approachf(float v, float target, float step)
+{
+    if (v < target) {
+        v += step;
+        if (v > target) v = target;
+    } else if (v > target) {
+        v -= step;
+        if (v < target) v = target;
+    }
+    return v;
+}
+
 static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]) {
     double bx = g_bodies[body_idx].pos[0] * RS - g_cam.pos[0];
     double by = g_bodies[body_idx].pos[1] * RS - g_cam.pos[1];
@@ -335,6 +354,7 @@ void render_init(void) {
     s_sp_cam_fwd   = glGetUniformLocation(s_sphere_shader, "u_cam_fwd");
     s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
     s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
+    s_sp_screen    = glGetUniformLocation(s_sphere_shader, "u_screen");
     s_sp_rotation  = glGetUniformLocation(s_sphere_shader, "u_rotation");
     s_sp_obliquity = glGetUniformLocation(s_sphere_shader, "u_obliquity");
     s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
@@ -343,6 +363,7 @@ void render_init(void) {
     glUseProgram(s_sphere_shader);
     glUniform1f(s_sp_fov_tan, tanf(FOV * 0.5f * (float)(PI / 180.0)));
     glUniform1f(s_sp_aspect,  (float)WIN_W / (float)WIN_H);
+    glUniform2f(s_sp_screen,  (float)WIN_W, (float)WIN_H);
     glUseProgram(0);
 
     /* Unit quad: UV (0,0)..(1,1) */
@@ -392,12 +413,14 @@ void render_init(void) {
         s_at_sun_rel   = glGetUniformLocation(s_atm_shader, "u_sun_rel");
         s_at_color     = glGetUniformLocation(s_atm_shader, "u_atm_color");
         s_at_intensity = glGetUniformLocation(s_atm_shader, "u_atm_intensity");
+        s_at_aspect    = glGetUniformLocation(s_atm_shader, "u_aspect");
+        s_at_screen    = glGetUniformLocation(s_atm_shader, "u_screen");
         /* Frame-constant uniforms */
         glUseProgram(s_atm_shader);
         glUniform1f(glGetUniformLocation(s_atm_shader, "u_fov_tan"),
                     tanf(FOV * 0.5f * (float)(PI / 180.0)));
-        glUniform1f(glGetUniformLocation(s_atm_shader, "u_aspect"),
-                    (float)WIN_W / (float)WIN_H);
+        glUniform1f(s_at_aspect, (float)WIN_W / (float)WIN_H);
+        glUniform2f(s_at_screen, (float)WIN_W, (float)WIN_H);
         glUseProgram(0);
     }
 
@@ -459,7 +482,7 @@ void render_init(void) {
         glUseProgram(0);
     }
     TTF_Init();
-    s_build_font = build_find_font(12);
+    s_build_font = build_find_font((int)BUILD_UI_FONT_SIZE);
 }
 
 static void render_build_preview(const float vp_camrel[16])
@@ -552,6 +575,7 @@ static void render_build_preview(const float vp_camrel[16])
      * which keeps it readable without a twitchy per-label solver. */
     if (s_build_ui_shader && s_build_font) {
         glUseProgram(s_build_ui_shader);
+        glUniform2f(s_build_ui_screen, (float)WIN_W, (float)WIN_H);
         glActiveTexture(GL_TEXTURE0);
         glBindVertexArray(s_build_ui_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_build_ui_vbo);
@@ -605,7 +629,7 @@ static void render_build_preview(const float vp_camrel[16])
                 dir_y[k] /= dl;
             }
 
-            text_w[k] = 12.0f * (float)s_build_dist_text[k].w
+            text_w[k] = BUILD_UI_FONT_SIZE * (float)s_build_dist_text[k].w
                       / (float)s_build_dist_text[k].h;
             if (text_w[k] > max_w) max_w = text_w[k];
             active[k] = 1;
@@ -613,7 +637,7 @@ static void render_build_preview(const float vp_camrel[16])
         }
 
         if (n_active > 0) {
-            float row_h = 15.0f;
+            float row_h = BUILD_UI_FONT_SIZE + 4.0f;
             float list_h = row_h * (float)n_active;
             float margin_x = 42.0f;
             float margin_y = 28.0f;
@@ -667,7 +691,8 @@ static void render_build_preview(const float vp_camrel[16])
             for (int k = 0; k < 3; k++) {
                 if (!active[k]) continue;
                 float x = (side > 0) ? list_x : list_x + max_w - text_w[k];
-                build_draw_text(&s_build_dist_text[k], x, list_y + row_h * (float)row, 12.0f);
+                build_draw_text(&s_build_dist_text[k], x, list_y + row_h * (float)row,
+                                BUILD_UI_FONT_SIZE);
                 row++;
             }
         }
@@ -682,6 +707,8 @@ static void render_build_preview(const float vp_camrel[16])
 /* ------------------------------------------------------------------ frame */
 void render_frame(const float view[16], const float proj[16],
                   const float view_rot[16], float dt) {
+    float aspect = (float)WIN_W / (float)WIN_H;
+
     /* Build combined VP */
     Mat4 vp;
     mat4_mul(vp, proj, view);
@@ -724,6 +751,8 @@ void render_frame(const float view[16], const float proj[16],
      * u_center is passed as camera-relative below, so float32 cancellation
      * at large world-space distances is avoided — same pattern as dots/trails. */
     glUniformMatrix4fv(s_sp_vp,       1, GL_FALSE, vp_camrel);
+    glUniform1f(s_sp_aspect, aspect);
+    glUniform2f(s_sp_screen, (float)WIN_W, (float)WIN_H);
     glUniform3f(s_sp_sun_world,  sun_wx, sun_wy, sun_wz);
     glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
     glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
@@ -826,6 +855,8 @@ void render_frame(const float view[16], const float proj[16],
      * Uses the same sphere billboard VAO and camera-relative VP as the sphere pass. */
     if (s_atm_shader) {
         glUseProgram(s_atm_shader);
+        glUniform1f(s_at_aspect, aspect);
+        glUniform2f(s_at_screen, (float)WIN_W, (float)WIN_H);
         glUniformMatrix4fv(s_at_vp, 1, GL_FALSE, vp_camrel);
         glUniform3f(s_at_cam_right, cam_right[0], cam_right[1], cam_right[2]);
         glUniform3f(s_at_cam_up,    cam_up[0],    cam_up[1],    cam_up[2]);
@@ -931,7 +962,9 @@ void render_frame(const float view[16], const float proj[16],
      * precision → star screen positions jump randomly on each frame →
      * visible as jerky "camera stutter" when moving at interstellar distances. */
     float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
+    int   dot_candidate[MAX_BODIES];
     int   dot_vis[MAX_BODIES];
+    memset(dot_candidate, 0, sizeof(dot_candidate));
     memset(dot_vis, 0, sizeof(dot_vis));
 
     {
@@ -965,6 +998,7 @@ void render_frame(const float view[16], const float proj[16],
 
             float sx, sy;
             if (!mat4_project(vp_camrel, rx, ry, rz, WIN_W, WIN_H, &sx, &sy)) continue;
+            dot_candidate[i] = 1;
 
             /* Check against all already-accepted dots */
             int blocked = 0;
@@ -980,6 +1014,19 @@ void render_frame(const float view[16], const float proj[16],
                 dot_sy[i]  = sy;
                 dot_vis[i] = 1;
             }
+        }
+    }
+
+    {
+        float step = dt * 1.25f;  /* ~800 ms fade for overlap in/out */
+        if (step > 1.0f) step = 1.0f;
+        for (int i = 0; i < g_nbodies; i++) {
+            if (!dot_candidate[i]) {
+                s_dot_overlap_alpha[i] = 0.0f;
+                continue;
+            }
+            s_dot_overlap_alpha[i] =
+                approachf(s_dot_overlap_alpha[i], dot_vis[i] ? 1.0f : 0.0f, step);
         }
     }
 
@@ -1026,11 +1073,12 @@ void render_frame(const float view[16], const float proj[16],
 
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
-            if (!dot_vis[i]) continue;
+            if (!dot_candidate[i] || s_dot_overlap_alpha[i] <= 0.001f) continue;
             Body *b = &g_bodies[i];
 
             /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
+            f *= s_dot_overlap_alpha[i];
             f *= body_point_star_glare_visibility(i);
 
             if (b->is_star) {
