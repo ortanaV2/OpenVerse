@@ -25,6 +25,9 @@ out vec4 frag_color;
 const float BILL_SCALE = 15.0;
 
 void main() {
+    const float FAR = 2000.0;
+    gl_FragDepth = log2(1.0 / gl_FragCoord.w + 1.0) / log2(FAR + 1.0);
+
     float r = length(v_uv);
     if (r >= BILL_SCALE) discard;
 

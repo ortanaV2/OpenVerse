@@ -5,7 +5,7 @@
  * discarded so points appear round instead of square.
  */
 
-in  vec3 v_color;
+in  vec4 v_color;
 out vec4 frag_color;
 
 void main() {
@@ -19,5 +19,5 @@ void main() {
     float d = length(gl_PointCoord - vec2(0.5));
     if (d > 0.5) discard;
 
-    frag_color = vec4(v_color, 1.0);
+    frag_color = v_color;
 }

@@ -19,7 +19,7 @@ uniform vec3  u_color;
 uniform float u_fade_start;   /* AU from camera: begin fading out */
 uniform float u_fade_end;     /* AU from camera: fully invisible  */
 
-out vec3 v_color;
+out vec4 v_color;
 
 void main() {
     float dist = length(a_pos);
@@ -31,7 +31,7 @@ void main() {
     float fade_far  = 1.0 - smoothstep(u_fade_start, u_fade_end, dist);
 
     float alpha = (0.28 + 0.28 * a_bright) * fade_near * fade_far;
-    v_color     = u_color * alpha;
+    v_color     = vec4(u_color * alpha, 1.0);
 
     /* Larger point when closer — stays crisp at distance */
     gl_PointSize = clamp(0.6 / (dist + 0.001), 1.0, 3.0);

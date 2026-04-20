@@ -95,6 +95,12 @@ static GLint  s_gl_radius    = -1;
 static GLint  s_gl_right     = -1;
 static GLint  s_gl_up        = -1;
 static GLint  s_gl_color     = -1;
+static const float STAR_GLARE_BILL_SCALE = 15.0f;
+static const float BODY_SPHERE_APPEAR_PX = 1.25f;
+static const float BODY_DOT_FADE_START_PX = 0.75f;
+static const float BODY_DOT_FADE_END_PX = 1.75f;
+static const float STAR_DOT_FULL_GLARE_PX = 1.25f;
+static const float STAR_DOT_FADE_START_GLARE_PX = 5.00f;
 
 /* ------------------------------------------------------------------ helpers */
 static float half_fov_tan(void) {
@@ -158,6 +164,37 @@ static float body_point_star_glare_visibility(int body_idx) {
     }
 
     return (float)visibility;
+}
+
+static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]) {
+    double bx = g_bodies[body_idx].pos[0] * RS - g_cam.pos[0];
+    double by = g_bodies[body_idx].pos[1] * RS - g_cam.pos[1];
+    double bz = g_bodies[body_idx].pos[2] * RS - g_cam.pos[2];
+    double bd2 = bx*bx + by*by + bz*bz;
+    if (bd2 <= 1e-18) return 0;
+
+    double bd = sqrt(bd2);
+    double ux = bx / bd;
+    double uy = by / bd;
+    double uz = bz / bd;
+
+    for (int i = 0; i < g_nbodies; i++) {
+        if (i == body_idx) continue;
+        if (g_bodies[i].is_star || info[i].show) continue;
+
+        double sx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
+        double sy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
+        double sz = g_bodies[i].pos[2] * RS - g_cam.pos[2];
+        double along = sx*ux + sy*uy + sz*uz;
+        if (along <= 0.0 || along >= bd) continue;
+
+        double sd2 = sx*sx + sy*sy + sz*sz;
+        double perp2 = sd2 - along*along;
+        double r = info[i].dr;
+        if (perp2 <= r*r) return 1;
+    }
+
+    return 0;
 }
 
 /* ------------------------------------------------------------------ init */
@@ -266,12 +303,12 @@ void render_init(void) {
 
     /* Dynamic VBO for dot positions + colors */
     s_dot_vao = gl_vao_create();
-    s_dot_vbo = gl_vbo_create(MAX_BODIES * 6 * sizeof(float),
+    s_dot_vbo = gl_vbo_create(MAX_BODIES * 7 * sizeof(float),
                                NULL, GL_DYNAMIC_DRAW);
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7*sizeof(float), (void*)0);
     glEnableVertexAttribArray(1);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6*sizeof(float),
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7*sizeof(float),
                           (void*)(3*sizeof(float)));
     glBindVertexArray(0);
 }
@@ -375,7 +412,7 @@ void render_frame(const float view[16], const float proj[16],
          * Using px < 2.5 (old value) made the sphere pop in at 5px diameter,
          * which was 2× bigger than the dot and visually jarring. */
         body_px[i]   = px;
-        info[i].show = (px < 1.25f) ? 1 : 0;
+        info[i].show = (px < BODY_SPHERE_APPEAR_PX) ? 1 : 0;
 
         /* Sub-pixel bodies are shown as dots only — skip billboard render. */
         if (info[i].show) continue;
@@ -540,7 +577,11 @@ void render_frame(const float view[16], const float proj[16],
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
             if (body_point_star_glare_visibility(i) <= 0.02f) continue;
-            if (!info[i].show) continue;   /* rendered as full sphere — no dot */
+            if (g_bodies[i].is_star &&
+                body_px[i] * STAR_GLARE_BILL_SCALE >= STAR_DOT_FADE_START_GLARE_PX) continue;
+            if (!g_bodies[i].is_star && body_px[i] >= BODY_DOT_FADE_END_PX)
+                continue;
+            if (body_point_occluded_by_body(i, info)) continue;
             Body *bi = &g_bodies[i];
 
             /* Camera-relative position in double → float (no float cancellation) */
@@ -577,9 +618,8 @@ void render_frame(const float view[16], const float proj[16],
     }
 
     /* Distance from camera to nearest star — used for LOD dot fade.
-     * Non-star dots fade from full brightness at SYS_DOT_FADE_START to black
-     * (invisible against the near-black background) at SYS_DOT_FADE_END.
-     * The star dot is always kept at full brightness.
+     * Non-star dots fade from opaque at SYS_DOT_FADE_START to transparent
+     * at SYS_DOT_FADE_END.  The star dot is handled by its own glare fade.
      * Subtraction is done in double BEFORE casting to float to avoid the
      * catastrophic float cancellation that occurs at 4+ ly (camera and star
      * both at ~250,000 AU → float32 difference is meaningless).               */
@@ -602,13 +642,13 @@ void render_frame(const float view[16], const float proj[16],
      * vp_camrel (proj × view_rot, no translation) so the GL depth values
      * are produced by the same formula as the sphere shader's gl_FragDepth,
      * avoiding any world-space float cancellation at large distances.
-     * Non-star dots have their RGB multiplied by dot_fade (fade to black).
+     * Dot fades are carried in alpha, not by darkening RGB.  This keeps
+     * transitions clean over star glare and other bright layers.
      *
-     * Sphere-approach fade: when a body's projected radius px approaches the
-     * dot→sphere threshold (1.25 px), the dot's brightness fades from 1.0 at
-     * px=0.75 to 0.2 at px=1.25.  This prevents the jarring jump from a
-     * bright dot to a just-appearing sphere at the transition point.          */
-    float dot_data[MAX_BODIES * 6];
+     * Sphere-approach fade: planet/moon dots fade later and overlap slightly
+     * with the first visible sphere pixels, so the transition is transparent
+     * instead of a hard handoff.                                             */
+    float dot_data[MAX_BODIES * 7];
     int   dot_count = 0;
     {
         double cx = g_cam.pos[0];
@@ -618,11 +658,6 @@ void render_frame(const float view[16], const float proj[16],
          * even at warp distances (far beyond the 2000 AU far plane).          */
         const float DOT_CLAMP_DIST = 1500.0f;
 
-        /* Sphere-approach fade constants */
-        const float SPHERE_FADE_START = 0.75f;   /* px: fade begins       */
-        const float SPHERE_FADE_END   = 1.25f;   /* px: sphere appears    */
-        const float SPHERE_FADE_MIN   = 0.2f;    /* alpha floor at end    */
-
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
             if (!dot_vis[i]) continue;
@@ -631,15 +666,25 @@ void render_frame(const float view[16], const float proj[16],
             /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
             f *= body_point_star_glare_visibility(i);
+
+            if (b->is_star) {
+                float glare_px = body_px[i] * STAR_GLARE_BILL_SCALE;
+                if (glare_px > STAR_DOT_FULL_GLARE_PX) {
+                    float t = (glare_px - STAR_DOT_FULL_GLARE_PX)
+                            / (STAR_DOT_FADE_START_GLARE_PX - STAR_DOT_FULL_GLARE_PX);
+                    if (t > 1.0f) t = 1.0f;
+                    f *= 1.0f - t;
+                }
+            }
             if (f <= 0.0f) continue;   /* skip invisible non-star dots */
 
-            /* Sphere-approach fade: dot dims as body grows toward sphere threshold */
+            /* Sphere-approach fade: dot remains briefly while the sphere appears. */
             float px_i = body_px[i];
-            if (px_i > SPHERE_FADE_START) {
-                float t = (px_i - SPHERE_FADE_START) / (SPHERE_FADE_END - SPHERE_FADE_START);
+            if (!b->is_star && px_i > BODY_DOT_FADE_START_PX) {
+                float t = (px_i - BODY_DOT_FADE_START_PX)
+                        / (BODY_DOT_FADE_END_PX - BODY_DOT_FADE_START_PX);
                 if (t > 1.0f) t = 1.0f;
-                float sfade = 1.0f - (1.0f - SPHERE_FADE_MIN) * t;
-                f *= sfade;
+                f *= 1.0f - t;
             }
             if (f <= 0.0f) continue;
 
@@ -653,12 +698,13 @@ void render_frame(const float view[16], const float proj[16],
                     bx *= s; by *= s; bz *= s;
                 }
             }
-            dot_data[dot_count*6+0] = bx;
-            dot_data[dot_count*6+1] = by;
-            dot_data[dot_count*6+2] = bz;
-            dot_data[dot_count*6+3] = b->col[0] * f;
-            dot_data[dot_count*6+4] = b->col[1] * f;
-            dot_data[dot_count*6+5] = b->col[2] * f;
+            dot_data[dot_count*7+0] = bx;
+            dot_data[dot_count*7+1] = by;
+            dot_data[dot_count*7+2] = bz;
+            dot_data[dot_count*7+3] = b->col[0];
+            dot_data[dot_count*7+4] = b->col[1];
+            dot_data[dot_count*7+5] = b->col[2];
+            dot_data[dot_count*7+6] = f;
             dot_count++;
         }
     }
@@ -669,11 +715,17 @@ void render_frame(const float view[16], const float proj[16],
         glBindVertexArray(s_dot_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_dot_vbo);
         glBufferSubData(GL_ARRAY_BUFFER, 0,
-                        dot_count * 6 * sizeof(float), dot_data);
-        glEnable(GL_DEPTH_TEST);
+                        dot_count * 7 * sizeof(float), dot_data);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         glPointSize(2.5f);
         glDrawArrays(GL_POINTS, 0, dot_count);
         glPointSize(1.0f);
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
         glBindVertexArray(0);
     }
 
@@ -699,6 +751,7 @@ void render_frame(const float view[16], const float proj[16],
         glBlendFunc(GL_ONE, GL_ONE);
         glDepthMask(GL_FALSE);
         glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
         glBindVertexArray(s_sphere_vao);
 
         for (int i = 0; i < g_nbodies; i++) {
@@ -726,6 +779,7 @@ void render_frame(const float view[16], const float proj[16],
         }
 
         glBindVertexArray(0);
+        glDepthFunc(GL_LESS);
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }

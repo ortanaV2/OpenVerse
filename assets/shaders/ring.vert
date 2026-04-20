@@ -26,7 +26,7 @@ uniform vec3 u_b1;       /* ring-plane basis 1 */
 uniform vec3 u_b2;       /* ring-plane basis 2 */
 uniform vec3 u_pole;     /* ring-plane normal (Saturn pole) */
 
-out vec3 v_color;
+out vec4 v_color;
 
 void main() {
     /* First-order Keplerian approximation — valid for e < 0.05 */
@@ -42,6 +42,6 @@ void main() {
              + r * (c * u_b1 + s * u_b2)
              + a_height * u_pole;
 
-    v_color     = a_color;
+    v_color     = vec4(a_color, 1.0);
     gl_Position = u_vp * vec4(pos, 1.0);
 }
