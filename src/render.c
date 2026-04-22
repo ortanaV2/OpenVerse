@@ -280,20 +280,6 @@ static float body_point_star_glare_visibility(int body_idx) {
     return (float)visibility;
 }
 
-static float s_dot_overlap_alpha[MAX_BODIES];
-
-static float approachf(float v, float target, float step)
-{
-    if (v < target) {
-        v += step;
-        if (v > target) v = target;
-    } else if (v > target) {
-        v -= step;
-        if (v < target) v = target;
-    }
-    return v;
-}
-
 static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]) {
     double bx = g_bodies[body_idx].pos[0] * RS - g_cam.pos[0];
     double by = g_bodies[body_idx].pos[1] * RS - g_cam.pos[1];
@@ -913,7 +899,8 @@ void render_frame(const float view[16], const float proj[16],
      * Priority: Sun(0) > planets > moons. Within each tier: closer first.
      * Overlap check in screen space: two dots clash if their centres are
      * closer than DOT_EXCL_PX pixels.                                      */
-#define DOT_EXCL_PX 6.0f   /* exclusion radius in pixels */
+#define DOT_EXCL_PX 6.0f       /* fully separated at this screen distance */
+#define DOT_HIDE_PX 2.5f       /* fully hidden when centers nearly overlap */
 
     /* Build priority order: stars (by dcam) > planets (by dcam) > moons (by dcam).
      * Stars must come first so they always win the screen-space overlap slot over
@@ -962,8 +949,10 @@ void render_frame(const float view[16], const float proj[16],
      * precision → star screen positions jump randomly on each frame →
      * visible as jerky "camera stutter" when moving at interstellar distances. */
     float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
+    float dot_overlap_alpha[MAX_BODIES];
     int   dot_candidate[MAX_BODIES];
     int   dot_vis[MAX_BODIES];
+    memset(dot_overlap_alpha, 0, sizeof(dot_overlap_alpha));
     memset(dot_candidate, 0, sizeof(dot_candidate));
     memset(dot_vis, 0, sizeof(dot_vis));
 
@@ -1000,33 +989,30 @@ void render_frame(const float view[16], const float proj[16],
             if (!mat4_project(vp_camrel, rx, ry, rz, WIN_W, WIN_H, &sx, &sy)) continue;
             dot_candidate[i] = 1;
 
-            /* Check against all already-accepted dots */
-            int blocked = 0;
+            /* Fade overlap by screen distance instead of by elapsed time.
+             * Higher-priority dots still reserve the slot; lower-priority dots
+             * become transparent as their centers approach that slot. */
+            float overlap_alpha = 1.0f;
+            float nearest2 = DOT_EXCL_PX * DOT_EXCL_PX;
             for (int oj = 0; oj < oi; oj++) {
                 int j = dot_order[oj];
                 if (!dot_vis[j]) continue;
                 float dx = sx - dot_sx[j], dy = sy - dot_sy[j];
-                if (dx*dx + dy*dy < DOT_EXCL_PX * DOT_EXCL_PX)
-                    { blocked = 1; break; }
+                float d2 = dx*dx + dy*dy;
+                if (d2 < nearest2) nearest2 = d2;
             }
-            if (!blocked) {
+
+            if (nearest2 < DOT_EXCL_PX * DOT_EXCL_PX) {
+                float d = sqrtf(nearest2);
+                overlap_alpha = (float)smoothstepd(DOT_HIDE_PX, DOT_EXCL_PX, d);
+            }
+
+            dot_overlap_alpha[i] = overlap_alpha;
+            if (overlap_alpha >= 0.999f) {
                 dot_sx[i]  = sx;
                 dot_sy[i]  = sy;
                 dot_vis[i] = 1;
             }
-        }
-    }
-
-    {
-        float step = dt * 1.25f;  /* ~800 ms fade for overlap in/out */
-        if (step > 1.0f) step = 1.0f;
-        for (int i = 0; i < g_nbodies; i++) {
-            if (!dot_candidate[i]) {
-                s_dot_overlap_alpha[i] = 0.0f;
-                continue;
-            }
-            s_dot_overlap_alpha[i] =
-                approachf(s_dot_overlap_alpha[i], dot_vis[i] ? 1.0f : 0.0f, step);
         }
     }
 
@@ -1073,12 +1059,12 @@ void render_frame(const float view[16], const float proj[16],
 
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
-            if (!dot_candidate[i] || s_dot_overlap_alpha[i] <= 0.001f) continue;
+            if (!dot_candidate[i] || dot_overlap_alpha[i] <= 0.001f) continue;
             Body *b = &g_bodies[i];
 
             /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
-            f *= s_dot_overlap_alpha[i];
+            f *= dot_overlap_alpha[i];
             f *= body_point_star_glare_visibility(i);
 
             if (b->is_star) {

@@ -200,6 +200,7 @@ static void draw_build_bar(float W)
     const float PAD = 14.0f;
     const float ITEM_W = 112.0f;
     const float ITEM_H = 42.0f;
+    const float ITEM_RAISED_H = 56.0f;
     const float GAP = 8.0f;
     int n = build_preset_count();
     if (n > 8) n = 8;
@@ -217,21 +218,19 @@ static void draw_build_bar(float W)
     for (int i = 0; i < n; i++) {
         const BuildPreset *p = build_preset_at(i);
         if (!p) continue;
-        float item_y = Y + 24.0f;
         int active = (i == selected);
-        draw_rect(x, item_y, ITEM_W, ITEM_H,
-                  active ? 0.18f : 1.0f,
-                  active ? 0.18f : 1.0f,
-                  active ? 0.18f : 1.0f,
+        float item_h = active ? ITEM_RAISED_H : ITEM_H;
+        float item_y = Y + 24.0f + (ITEM_H - item_h);
+        float strip_h = active ? 8.0f : 6.0f;
+        draw_rect(x, item_y, ITEM_W, item_h, 1.0f, 1.0f, 1.0f,
                   active ? 1.0f : 0.85f);
-        draw_rect(x, item_y, ITEM_W, 6.0f, p->col[0], p->col[1], p->col[2], 1.0f);
-        SDL_Color item_col = active
-                           ? (SDL_Color){255, 255, 255, 255}
-                           : (SDL_Color){0, 0, 0, 255};
+        draw_rect(x, item_y, ITEM_W, strip_h, p->col[0], p->col[1], p->col[2], 1.0f);
+        SDL_Color item_col = {0, 0, 0, 255};
         update_text(&s_tc_build_items[i], p->name, item_col);
         if (s_tc_build_items[i].tex) {
             float tw = (float)FONT_SIZE * (float)s_tc_build_items[i].w / (float)s_tc_build_items[i].h;
-            draw_tex(&s_tc_build_items[i], x + (ITEM_W - tw) * 0.5f, item_y + 15.0f, (float)FONT_SIZE);
+            float text_y = item_y + strip_h + (item_h - strip_h - (float)FONT_SIZE) * 0.5f;
+            draw_tex(&s_tc_build_items[i], x + (ITEM_W - tw) * 0.5f, text_y, (float)FONT_SIZE);
         }
         x += ITEM_W + GAP;
     }

@@ -305,9 +305,9 @@ static void add_parent_velocity(BodyCreateSpec *spec, int parent)
     if (r <= 0.0 || gm <= 0.0) return;
 
     double up[3] = {0.0, 1.0, 0.0};
-    double tx = up[1]*rz - up[2]*ry;
-    double ty = up[2]*rx - up[0]*rz;
-    double tz = up[0]*ry - up[1]*rx;
+    double tx = ry*up[2] - rz*up[1];
+    double ty = rz*up[0] - rx*up[2];
+    double tz = rx*up[1] - ry*up[0];
     double tl = sqrt(tx*tx + ty*ty + tz*tz);
     if (tl < 1e-9) {
         float fdx, fdy, fdz;
