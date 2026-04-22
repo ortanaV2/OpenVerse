@@ -91,6 +91,29 @@ static GLuint surface_to_texture(SDL_Surface *surf, int *w, int *h) {
     return tex;
 }
 
+static void build_label_texture(int i)
+{
+    if (i < 0 || i >= MAX_BODIES || i >= g_nbodies || !s_font) return;
+
+    if (s_tex[i]) {
+        glDeleteTextures(1, &s_tex[i]);
+        s_tex[i] = 0;
+    }
+
+    SDL_Color col;
+    col.r = (Uint8)(fminf(g_bodies[i].col[0]*1.4f+0.15f, 1.0f)*255);
+    col.g = (Uint8)(fminf(g_bodies[i].col[1]*1.4f+0.15f, 1.0f)*255);
+    col.b = (Uint8)(fminf(g_bodies[i].col[2]*1.4f+0.15f, 1.0f)*255);
+    col.a = 255;
+    int is_moon = (g_bodies[i].parent >= 0 &&
+                   !g_bodies[g_bodies[i].parent].is_star);
+    TTF_SetFontStyle(s_font, is_moon ? TTF_STYLE_ITALIC : TTF_STYLE_NORMAL);
+    SDL_Surface *surf = TTF_RenderText_Blended(s_font, g_bodies[i].name, col);
+    if (!surf) return;
+    s_tex[i] = surface_to_texture(surf, &s_tex_w[i], &s_tex_h[i]);
+    TTF_SetFontStyle(s_font, TTF_STYLE_NORMAL);
+}
+
 /* ------------------------------------------------------------------ public */
 void labels_init(void) {
     /* Shader */
@@ -139,21 +162,17 @@ void labels_init(void) {
     memset(s_show_accum, 0, sizeof(s_show_accum));
     memset(s_hide_accum, 0, sizeof(s_hide_accum));
     memset(s_active,     0, sizeof(s_active));
-    for (int i = 0; i < g_nbodies; i++) {
-        SDL_Color col;
-        col.r = (Uint8)(fminf(g_bodies[i].col[0]*1.4f+0.15f, 1.0f)*255);
-        col.g = (Uint8)(fminf(g_bodies[i].col[1]*1.4f+0.15f, 1.0f)*255);
-        col.b = (Uint8)(fminf(g_bodies[i].col[2]*1.4f+0.15f, 1.0f)*255);
-        col.a = 255;
-        /* moon: has a parent and that parent is not a star */
-        int is_moon = (g_bodies[i].parent >= 0 &&
-                       !g_bodies[g_bodies[i].parent].is_star);
-        TTF_SetFontStyle(s_font, is_moon ? TTF_STYLE_ITALIC : TTF_STYLE_NORMAL);
-        SDL_Surface *surf = TTF_RenderText_Blended(s_font, g_bodies[i].name, col);
-        if (!surf) continue;
-        s_tex[i] = surface_to_texture(surf, &s_tex_w[i], &s_tex_h[i]);
-    }
-    TTF_SetFontStyle(s_font, TTF_STYLE_NORMAL);
+    for (int i = 0; i < g_nbodies; i++)
+        build_label_texture(i);
+}
+
+void labels_add_body(int body_idx)
+{
+    if (body_idx < 0 || body_idx >= MAX_BODIES) return;
+    s_show_accum[body_idx] = 0.0f;
+    s_hide_accum[body_idx] = 0.0f;
+    s_active[body_idx] = 0;
+    build_label_texture(body_idx);
 }
 
 void labels_render(const float view[16], const float proj[16],

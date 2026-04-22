@@ -30,10 +30,14 @@
 #include "rings.h"
 #include "asteroids.h"
 #include "ui.h"
+#include "build.h"
 
 /* ------------------------------------------------------------------ globals */
 static SDL_Window   *s_win = NULL;
 static SDL_GLContext s_ctx = NULL;
+int g_win_w = DEFAULT_WIN_W;
+int g_win_h = DEFAULT_WIN_H;
+static int s_fullscreen = 0;
 
 /* Mouse state */
 static int   s_freelook   = 0;       /* 1 = Tab toggled free-look, mouse captured */
@@ -62,6 +66,27 @@ int g_warp = 0;            /* public mirror of s_warp for UI/other modules */
 
 
 /* ------------------------------------------------------------------ init / quit */
+static void update_viewport_size(void) {
+    int w = DEFAULT_WIN_W;
+    int h = DEFAULT_WIN_H;
+    if (s_win) SDL_GL_GetDrawableSize(s_win, &w, &h);
+    if (w < 1) w = 1;
+    if (h < 1) h = 1;
+    g_win_w = w;
+    g_win_h = h;
+    glViewport(0, 0, g_win_w, g_win_h);
+}
+
+static void toggle_fullscreen(void) {
+    Uint32 flags = s_fullscreen ? 0u : SDL_WINDOW_FULLSCREEN_DESKTOP;
+    if (SDL_SetWindowFullscreen(s_win, flags) != 0) {
+        fprintf(stderr, "[Main] fullscreen toggle: %s\n", SDL_GetError());
+        return;
+    }
+    s_fullscreen = !s_fullscreen;
+    update_viewport_size();
+}
+
 static int app_init(void) {
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         fprintf(stderr, "[Main] SDL_Init: %s\n", SDL_GetError());
@@ -78,8 +103,9 @@ static int app_init(void) {
 
     s_win = SDL_CreateWindow("verse",
                              SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                             WIN_W, WIN_H,
-                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN);
+                             DEFAULT_WIN_W, DEFAULT_WIN_H,
+                             SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
+                             SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!s_win) {
         fprintf(stderr, "[Main] SDL_CreateWindow: %s\n", SDL_GetError());
         return 0;
@@ -109,6 +135,7 @@ static int app_init(void) {
 
     glEnable(GL_MULTISAMPLE);
     glClearColor(0.0f, 0.0f, 0.02f, 1.0f);
+    update_viewport_size();
 
     return 1;
 }
@@ -143,6 +170,19 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_q: s_key_q = 1; break;
         case SDLK_e: s_key_e = 1; break;
         case SDLK_r: cam_reset(); break;
+        case SDLK_F11:
+            if (!e->key.repeat) toggle_fullscreen();
+            break;
+        case SDLK_RETURN:
+            if (!e->key.repeat && (e->key.keysym.mod & KMOD_ALT))
+                toggle_fullscreen();
+            break;
+        case SDLK_b:
+            if (!e->key.repeat) build_toggle();
+            break;
+        case SDLK_TAB:
+            build_set_tab_held(1);
+            break;
         case SDLK_t:
             s_warp = !s_warp;
             g_warp = s_warp;
@@ -161,6 +201,10 @@ static void handle_event(const SDL_Event *e, float dt) {
             break;
         case SDLK_SPACE: g_paused = !g_paused; break;
         case SDLK_ESCAPE:
+            if (g_build_mode) {
+                build_toggle();
+                break;
+            }
             if (s_freelook) {
                 s_freelook = 0;
                 SDL_SetRelativeMouseMode(SDL_FALSE);
@@ -190,10 +234,15 @@ static void handle_event(const SDL_Event *e, float dt) {
         case SDLK_d: s_key_d = 0; break;
         case SDLK_q: s_key_q = 0; break;
         case SDLK_e: s_key_e = 0; break;
+        case SDLK_TAB: build_set_tab_held(0); break;
         }
         break;
 
     case SDL_MOUSEBUTTONDOWN:
+        if (g_build_mode && e->button.button == SDL_BUTTON_LEFT) {
+            build_place_current();
+            break;
+        }
         if (e->button.button == SDL_BUTTON_LEFT && !s_freelook) {
             s_freelook = 1;
             SDL_SetRelativeMouseMode(SDL_TRUE);
@@ -212,6 +261,10 @@ static void handle_event(const SDL_Event *e, float dt) {
         break;
 
     case SDL_MOUSEWHEEL:
+        if (g_build_mode && g_build_tab_held) {
+            build_scroll(e->wheel.y);
+            break;
+        }
         g_cam.speed *= (e->wheel.y > 0) ? 1.3f : (1.0f / 1.3f);
         if (s_warp) {
             /* Warp range: 200 AU/s (0.003 ly/s) … 63 241 AU/s (1 ly/s) */
@@ -220,6 +273,13 @@ static void handle_event(const SDL_Event *e, float dt) {
         } else {
             if (g_cam.speed < 0.00001f)          g_cam.speed = 0.00001f;
             if (g_cam.speed > WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
+        }
+        break;
+
+    case SDL_WINDOWEVENT:
+        if (e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED ||
+            e->window.event == SDL_WINDOWEVENT_RESIZED) {
+            update_viewport_size();
         }
         break;
 
@@ -269,6 +329,7 @@ int main(int argc, char **argv) {
     asteroids_init("assets/universe.json");
     labels_init();
     ui_init();
+    build_init();
 
     /* Trail warm-up: pre-simulate 2 years using RESPA.
      * 730 outer steps × 50 inner steps = 36 500 inner steps total —

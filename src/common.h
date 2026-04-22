@@ -22,8 +22,12 @@
 #include <string.h>
 
 /* ------------------------------------------------------------------ window */
-#define WIN_W  1280
-#define WIN_H   720
+#define DEFAULT_WIN_W  1280
+#define DEFAULT_WIN_H   720
+extern int g_win_w;
+extern int g_win_h;
+#define WIN_W  g_win_w
+#define WIN_H  g_win_h
 #define FOV    60.0f
 
 /* ------------------------------------------------------------------ math */

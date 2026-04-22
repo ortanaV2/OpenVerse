@@ -90,6 +90,25 @@ static void body_defaults(Body *bo)
     bo->atm_scale = 1.0f;
 }
 
+static double trail_interval_for_body(const Body *bo)
+{
+    if (bo->is_star) return DAY * 25.0;
+    if (bo->parent >= 0 && bo->parent < g_nbodies && g_bodies[bo->parent].mass > 0.0) {
+        double dx = bo->pos[0] - g_bodies[bo->parent].pos[0];
+        double dy = bo->pos[1] - g_bodies[bo->parent].pos[1];
+        double dz = bo->pos[2] - g_bodies[bo->parent].pos[2];
+        double r = sqrt(dx*dx + dy*dy + dz*dz);
+        double gm = G_CONST * g_bodies[bo->parent].mass;
+        if (r > 0.0 && gm > 0.0) {
+            double T = 2.0 * PI * sqrt(r * r * r / gm);
+            double interval = T / 400.0;
+            if (interval < 60.0) interval = 60.0;
+            return interval;
+        }
+    }
+    return DAY;
+}
+
 static void read_rotation(const JsonNode *bn, Body *bo)
 {
     JsonNode *obl = json_get(bn, "obliquity_deg");
@@ -392,6 +411,48 @@ void universe_load(const char *path)
             g_nbodies, n_stars, n_stars == 1 ? "" : "s");
 
     json_free(root);
+}
+
+int universe_add_body(const BodyCreateSpec *spec)
+{
+    if (!spec) return -1;
+    if (g_nbodies >= MAX_BODIES) {
+        fprintf(stderr, "[universe] cannot add body '%s': MAX_BODIES reached\n",
+                spec->name ? spec->name : "unknown");
+        return -1;
+    }
+
+    ensure_capacity(g_nbodies + 1);
+    int idx = g_nbodies++;
+    Body *bo = &g_bodies[idx];
+    body_defaults(bo);
+
+    strncpy(bo->name, spec->name ? spec->name : "Body", 31);
+    bo->name[31] = '\0';
+    bo->mass = spec->mass;
+    bo->radius = spec->radius;
+    bo->pos[0] = spec->pos[0];
+    bo->pos[1] = spec->pos[1];
+    bo->pos[2] = spec->pos[2];
+    bo->vel[0] = spec->vel[0];
+    bo->vel[1] = spec->vel[1];
+    bo->vel[2] = spec->vel[2];
+    bo->col[0] = spec->col[0];
+    bo->col[1] = spec->col[1];
+    bo->col[2] = spec->col[2];
+    bo->is_star = spec->is_star;
+    bo->parent = spec->parent;
+    bo->obliquity = spec->obliquity;
+    bo->rotation_rate = spec->rotation_rate;
+    bo->atm_color[0] = spec->atm_color[0];
+    bo->atm_color[1] = spec->atm_color[1];
+    bo->atm_color[2] = spec->atm_color[2];
+    bo->atm_intensity = spec->atm_intensity;
+    bo->atm_scale = spec->atm_scale > 0.0f ? spec->atm_scale : 1.0f;
+    bo->trail_interval = trail_interval_for_body(bo);
+    alloc_trail(bo);
+
+    return idx;
 }
 
 void universe_shutdown(void)

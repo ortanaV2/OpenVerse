@@ -16,6 +16,7 @@
 #include "rings.h"
 #include "asteroids.h"
 #include "labels.h"
+#include "build.h"
 #include "gl_utils.h"
 #include "math3d.h"
 #include <math.h>
@@ -38,6 +39,7 @@ static GLint  s_sp_sun_rel     = -1;   /* sun - center, double-precision diff */
 static GLint  s_sp_cam_fwd     = -1;
 static GLint  s_sp_fov_tan     = -1;
 static GLint  s_sp_aspect      = -1;
+static GLint  s_sp_screen      = -1;
 static GLint  s_sp_color       = -1;
 static GLint  s_sp_emission    = -1;
 static GLint  s_sp_ambient     = -1;
@@ -76,6 +78,8 @@ static GLint  s_at_planet_r  = -1;
 static GLint  s_at_sun_rel   = -1;
 static GLint  s_at_color     = -1;
 static GLint  s_at_intensity = -1;
+static GLint  s_at_aspect    = -1;
+static GLint  s_at_screen    = -1;
 
 /* Atmosphere data is now stored per-body in g_bodies[i].atm_color/intensity/scale,
  * populated by universe_load() from assets/universe.json.
@@ -102,9 +106,119 @@ static const float BODY_DOT_FADE_END_PX = 1.75f;
 static const float STAR_DOT_FULL_GLARE_PX = 1.25f;
 static const float STAR_DOT_FADE_START_GLARE_PX = 5.00f;
 
+/* ------------------------------------------------------------------ build preview */
+static GLuint s_build_line_shader = 0;
+static GLuint s_build_line_vao = 0;
+static GLuint s_build_line_vbo = 0;
+static GLint  s_build_line_vp = -1;
+
+static GLuint s_build_ui_shader = 0;
+static GLuint s_build_ui_vao = 0;
+static GLuint s_build_ui_vbo = 0;
+static GLint  s_build_ui_screen = -1;
+static GLint  s_build_ui_color = -1;
+static GLint  s_build_ui_use_tex = -1;
+static GLint  s_build_ui_tex = -1;
+static TTF_Font *s_build_font = NULL;
+
+#define BUILD_UI_FONT_SIZE 14.0f
+
+typedef struct {
+    GLuint tex;
+    int w, h;
+    char str[96];
+} BuildTextCache;
+
+static BuildTextCache s_build_dist_text[3];
+
 /* ------------------------------------------------------------------ helpers */
 static float half_fov_tan(void) {
     return tanf(FOV * 0.5f * (float)(PI / 180.0));
+}
+
+static TTF_Font *build_find_font(int size) {
+    static const char *paths[] = {
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        NULL
+    };
+    for (int i = 0; paths[i]; i++) {
+        TTF_Font *f = TTF_OpenFont(paths[i], size);
+        if (f) return f;
+    }
+    return NULL;
+}
+
+static GLuint build_surface_to_tex(SDL_Surface *surf, int *w, int *h) {
+    SDL_Surface *c = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ABGR8888, 0);
+    SDL_FreeSurface(surf);
+    if (!c) return 0;
+    *w = c->w; *h = c->h;
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, c->w, c->h,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, c->pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    SDL_FreeSurface(c);
+    return tex;
+}
+
+static void build_update_text(BuildTextCache *tc, const char *str) {
+    if (!s_build_font || strcmp(tc->str, str) == 0) return;
+    snprintf(tc->str, sizeof(tc->str), "%s", str);
+    if (tc->tex) {
+        glDeleteTextures(1, &tc->tex);
+        tc->tex = 0;
+    }
+    SDL_Color col = {235, 245, 255, 235};
+    SDL_Surface *surf = TTF_RenderText_Blended(s_build_font, str, col);
+    if (surf) tc->tex = build_surface_to_tex(surf, &tc->w, &tc->h);
+}
+
+static void build_draw_ui_quad(float x, float y, float w, float h) {
+    float v[24] = {
+        x,   y,   0,0,
+        x+w, y,   1,0,
+        x+w, y+h, 1,1,
+        x,   y,   0,0,
+        x+w, y+h, 1,1,
+        x,   y+h, 0,1,
+    };
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+}
+
+static void build_draw_text(BuildTextCache *tc, float x, float y, float h) {
+    if (!tc || !tc->tex || !s_build_ui_shader) return;
+    float w = h * (float)tc->w / (float)tc->h;
+    glUniform1i(s_build_ui_use_tex, 1);
+    glUniform4f(s_build_ui_color, 1, 1, 1, 1);
+    glBindTexture(GL_TEXTURE_2D, tc->tex);
+    build_draw_ui_quad(x, y, w, h);
+}
+
+static void format_dist_au(double au, char *buf, size_t n) {
+    if (au < 0.001)
+        snprintf(buf, n, "%.0f km", au * AU / 1000.0);
+    else if (au < 1.0)
+        snprintf(buf, n, "%.4f AU", au);
+    else if (au < 1000.0)
+        snprintf(buf, n, "%.2f AU", au);
+    else
+        snprintf(buf, n, "%.3f ly", au / 63241.0);
+}
+
+static float clampf_local(float v, float lo, float hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
 }
 
 /* Natural visual radius for a body (AU) — no boost.
@@ -226,6 +340,7 @@ void render_init(void) {
     s_sp_cam_fwd   = glGetUniformLocation(s_sphere_shader, "u_cam_fwd");
     s_sp_fov_tan   = glGetUniformLocation(s_sphere_shader, "u_fov_tan");
     s_sp_aspect    = glGetUniformLocation(s_sphere_shader, "u_aspect");
+    s_sp_screen    = glGetUniformLocation(s_sphere_shader, "u_screen");
     s_sp_rotation  = glGetUniformLocation(s_sphere_shader, "u_rotation");
     s_sp_obliquity = glGetUniformLocation(s_sphere_shader, "u_obliquity");
     s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
@@ -234,6 +349,7 @@ void render_init(void) {
     glUseProgram(s_sphere_shader);
     glUniform1f(s_sp_fov_tan, tanf(FOV * 0.5f * (float)(PI / 180.0)));
     glUniform1f(s_sp_aspect,  (float)WIN_W / (float)WIN_H);
+    glUniform2f(s_sp_screen,  (float)WIN_W, (float)WIN_H);
     glUseProgram(0);
 
     /* Unit quad: UV (0,0)..(1,1) */
@@ -283,12 +399,14 @@ void render_init(void) {
         s_at_sun_rel   = glGetUniformLocation(s_atm_shader, "u_sun_rel");
         s_at_color     = glGetUniformLocation(s_atm_shader, "u_atm_color");
         s_at_intensity = glGetUniformLocation(s_atm_shader, "u_atm_intensity");
+        s_at_aspect    = glGetUniformLocation(s_atm_shader, "u_aspect");
+        s_at_screen    = glGetUniformLocation(s_atm_shader, "u_screen");
         /* Frame-constant uniforms */
         glUseProgram(s_atm_shader);
         glUniform1f(glGetUniformLocation(s_atm_shader, "u_fov_tan"),
                     tanf(FOV * 0.5f * (float)(PI / 180.0)));
-        glUniform1f(glGetUniformLocation(s_atm_shader, "u_aspect"),
-                    (float)WIN_W / (float)WIN_H);
+        glUniform1f(s_at_aspect, (float)WIN_W / (float)WIN_H);
+        glUniform2f(s_at_screen, (float)WIN_W, (float)WIN_H);
         glUseProgram(0);
     }
 
@@ -311,11 +429,272 @@ void render_init(void) {
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7*sizeof(float),
                           (void*)(3*sizeof(float)));
     glBindVertexArray(0);
+
+    /* --- Build-mode preview lines --- */
+    s_build_line_shader = gl_shader_load("assets/shaders/build_line.vert",
+                                         "assets/shaders/build_line.frag");
+    if (s_build_line_shader) {
+        s_build_line_vp = glGetUniformLocation(s_build_line_shader, "u_vp");
+        s_build_line_vao = gl_vao_create();
+        s_build_line_vbo = gl_vbo_create(6 * 7 * sizeof(float),
+                                         NULL, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7*sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7*sizeof(float),
+                              (void*)(3*sizeof(float)));
+        glBindVertexArray(0);
+    }
+
+    /* --- Build-mode distance labels (screen-space text) --- */
+    s_build_ui_shader = gl_shader_load("assets/shaders/ui.vert",
+                                       "assets/shaders/ui.frag");
+    if (s_build_ui_shader) {
+        s_build_ui_screen  = glGetUniformLocation(s_build_ui_shader, "u_screen");
+        s_build_ui_color   = glGetUniformLocation(s_build_ui_shader, "u_color");
+        s_build_ui_use_tex = glGetUniformLocation(s_build_ui_shader, "u_use_tex");
+        s_build_ui_tex     = glGetUniformLocation(s_build_ui_shader, "u_tex");
+        s_build_ui_vao = gl_vao_create();
+        s_build_ui_vbo = gl_vbo_create(24 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4*sizeof(float),
+                              (void*)(2*sizeof(float)));
+        glBindVertexArray(0);
+        glUseProgram(s_build_ui_shader);
+        glUniform2f(s_build_ui_screen, (float)WIN_W, (float)WIN_H);
+        glUniform1i(s_build_ui_tex, 0);
+        glUseProgram(0);
+    }
+    TTF_Init();
+    s_build_font = build_find_font((int)BUILD_UI_FONT_SIZE);
+}
+
+static void render_build_preview(const float vp_camrel[16])
+{
+    if (!g_build_mode) return;
+
+    const BuildPreset *preset = build_current_preset();
+    if (!preset) return;
+
+    double preview_m[3];
+    build_preview_pos_m(preview_m);
+
+    int idx[3];
+    double dist_au[3];
+    build_nearest3(preview_m, idx, dist_au);
+
+    float px = (float)(preview_m[0] * RS - g_cam.pos[0]);
+    float py = (float)(preview_m[1] * RS - g_cam.pos[1]);
+    float pz = (float)(preview_m[2] * RS - g_cam.pos[2]);
+
+    /* Ghost body: screen-readable marker whose distance is radius-aware. */
+    if (s_dot_shader) {
+        float dot[7] = {
+            px, py, pz,
+            preset->col[0], preset->col[1], preset->col[2], 0.88f
+        };
+        glUseProgram(s_dot_shader);
+        glUniformMatrix4fv(s_dot_vp, 1, GL_FALSE, vp_camrel);
+        glBindVertexArray(s_dot_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_dot_vbo);
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(dot), dot);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_PROGRAM_POINT_SIZE);
+        glPointSize(36.0f);
+        glDrawArrays(GL_POINTS, 0, 1);
+        glPointSize(1.0f);
+        glDisable(GL_PROGRAM_POINT_SIZE);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+        glDisable(GL_BLEND);
+        glBindVertexArray(0);
+    }
+
+    /* Distance guide lines to nearest bodies. */
+    if (s_build_line_shader) {
+        float line_data[6 * 7];
+        int v = 0;
+        for (int k = 0; k < 3; k++) {
+            if (idx[k] < 0) continue;
+            Body *b = &g_bodies[idx[k]];
+            float bx = (float)(b->pos[0] * RS - g_cam.pos[0]);
+            float by = (float)(b->pos[1] * RS - g_cam.pos[1]);
+            float bz = (float)(b->pos[2] * RS - g_cam.pos[2]);
+            float a = 0.62f - 0.12f * (float)k;
+
+            line_data[v*7+0] = px; line_data[v*7+1] = py; line_data[v*7+2] = pz;
+            line_data[v*7+3] = 1.0f; line_data[v*7+4] = 1.0f;
+            line_data[v*7+5] = 1.0f; line_data[v*7+6] = a;
+            v++;
+            line_data[v*7+0] = bx; line_data[v*7+1] = by; line_data[v*7+2] = bz;
+            line_data[v*7+3] = 1.0f; line_data[v*7+4] = 1.0f;
+            line_data[v*7+5] = 1.0f; line_data[v*7+6] = a;
+            v++;
+        }
+        if (v > 0) {
+            glUseProgram(s_build_line_shader);
+            glUniformMatrix4fv(s_build_line_vp, 1, GL_FALSE, vp_camrel);
+            glBindVertexArray(s_build_line_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_build_line_vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, v * 7 * sizeof(float), line_data);
+            glDisable(GL_DEPTH_TEST);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glLineWidth(1.5f);
+            glDrawArrays(GL_LINES, 0, v);
+            glLineWidth(1.0f);
+            glDepthMask(GL_TRUE);
+            glEnable(GL_DEPTH_TEST);
+            glDisable(GL_BLEND);
+            glBindVertexArray(0);
+        }
+    }
+
+    /* Screen-space distance list beside the preview.
+     * The list is placed on the side opposite the strongest guide-line bundle,
+     * which keeps it readable without a twitchy per-label solver. */
+    if (s_build_ui_shader && s_build_font) {
+        glUseProgram(s_build_ui_shader);
+        glUniform2f(s_build_ui_screen, (float)WIN_W, (float)WIN_H);
+        glActiveTexture(GL_TEXTURE0);
+        glBindVertexArray(s_build_ui_vao);
+        glBindBuffer(GL_ARRAY_BUFFER, s_build_ui_vbo);
+        glDisable(GL_DEPTH_TEST);
+        glDepthMask(GL_FALSE);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+        float psx = 0.0f, psy = 0.0f;
+        int preview_on_screen = mat4_project(vp_camrel, px, py, pz, WIN_W, WIN_H, &psx, &psy);
+        float preview_y = (float)WIN_H - psy;
+        int active[3] = {0, 0, 0};
+        float text_w[3] = {0.0f, 0.0f, 0.0f};
+        float dir_x[3] = {0.0f, 0.0f, 0.0f};
+        float dir_y[3] = {0.0f, 0.0f, 0.0f};
+        float max_w = 0.0f;
+        int n_active = 0;
+
+        for (int k = 0; k < 3; k++) {
+            if (idx[k] < 0 || !preview_on_screen) continue;
+            Body *b = &g_bodies[idx[k]];
+            float bx = (float)(b->pos[0] * RS - g_cam.pos[0]);
+            float by = (float)(b->pos[1] * RS - g_cam.pos[1]);
+            float bz = (float)(b->pos[2] * RS - g_cam.pos[2]);
+            float bsx = 0.0f, bsy = 0.0f;
+            int body_on_screen = mat4_project(vp_camrel, bx, by, bz, WIN_W, WIN_H, &bsx, &bsy);
+
+            char buf[96];
+            char dist_buf[32];
+            format_dist_au(dist_au[k], dist_buf, sizeof(dist_buf));
+            snprintf(buf, sizeof(buf), "%s  %s", b->name, dist_buf);
+            build_update_text(&s_build_dist_text[k], buf);
+            if (!s_build_dist_text[k].tex) continue;
+
+            if (body_on_screen) {
+                float body_y = (float)WIN_H - bsy;
+                dir_x[k] = bsx - psx;
+                dir_y[k] = body_y - preview_y;
+            } else {
+                dir_x[k] = 1.0f;
+                dir_y[k] = 0.0f;
+            }
+            {
+                float dl = sqrtf(dir_x[k]*dir_x[k] + dir_y[k]*dir_y[k]);
+                if (dl < 1.0f) {
+                    dir_x[k] = 1.0f;
+                    dir_y[k] = 0.0f;
+                    dl = 1.0f;
+                }
+                dir_x[k] /= dl;
+                dir_y[k] /= dl;
+            }
+
+            text_w[k] = BUILD_UI_FONT_SIZE * (float)s_build_dist_text[k].w
+                      / (float)s_build_dist_text[k].h;
+            if (text_w[k] > max_w) max_w = text_w[k];
+            active[k] = 1;
+            n_active++;
+        }
+
+        if (n_active > 0) {
+            float row_h = BUILD_UI_FONT_SIZE + 4.0f;
+            float list_h = row_h * (float)n_active;
+            float margin_x = 42.0f;
+            float margin_y = 28.0f;
+            float best_score = 1e30f;
+            float list_x = psx + margin_x;
+            float list_y = preview_y - margin_y - list_h;
+            int side = 1;
+
+            for (int q = 0; q < 4; q++) {
+                int sx = (q == 0 || q == 3) ? 1 : -1;
+                int sy = (q == 0 || q == 1) ? -1 : 1;
+                float cx = (sx > 0) ? psx + margin_x : psx - margin_x - max_w;
+                float cy = (sy < 0) ? preview_y - margin_y - list_h
+                                     : preview_y + margin_y;
+                float clamped_x = clampf_local(cx, 8.0f, (float)WIN_W - max_w - 8.0f);
+                float clamped_y = clampf_local(cy, 8.0f, (float)WIN_H - list_h - 8.0f);
+                float center_x = clamped_x + max_w * 0.5f;
+                float center_y = clamped_y + list_h * 0.5f;
+                float vx = center_x - psx;
+                float vy = center_y - preview_y;
+                float vl = sqrtf(vx*vx + vy*vy);
+                float score = fabsf(clamped_x - cx) * 8.0f
+                            + fabsf(clamped_y - cy) * 8.0f;
+                if (vl < 1.0f) vl = 1.0f;
+                vx /= vl;
+                vy /= vl;
+
+                for (int k = 0; k < 3; k++) {
+                    if (!active[k]) continue;
+                    float dot = vx * dir_x[k] + vy * dir_y[k];
+                    if (dot > 0.0f) score += dot * dot * 120.0f;
+                    {
+                        float raw_x = center_x - psx;
+                        float raw_y = center_y - preview_y;
+                        float along = raw_x * dir_x[k] + raw_y * dir_y[k];
+                        float perp = fabsf(raw_x * dir_y[k] - raw_y * dir_x[k]);
+                        if (along > 0.0f && perp < 48.0f)
+                            score += (48.0f - perp) * 2.5f;
+                    }
+                }
+
+                if (score < best_score) {
+                    best_score = score;
+                    list_x = clamped_x;
+                    list_y = clamped_y;
+                    side = sx;
+                }
+            }
+
+            int row = 0;
+            for (int k = 0; k < 3; k++) {
+                if (!active[k]) continue;
+                float x = (side > 0) ? list_x : list_x + max_w - text_w[k];
+                build_draw_text(&s_build_dist_text[k], x, list_y + row_h * (float)row,
+                                BUILD_UI_FONT_SIZE);
+                row++;
+            }
+        }
+
+        glBindVertexArray(0);
+        glDisable(GL_BLEND);
+        glDepthMask(GL_TRUE);
+        glEnable(GL_DEPTH_TEST);
+    }
 }
 
 /* ------------------------------------------------------------------ frame */
 void render_frame(const float view[16], const float proj[16],
                   const float view_rot[16], float dt) {
+    float aspect = (float)WIN_W / (float)WIN_H;
+
     /* Build combined VP */
     Mat4 vp;
     mat4_mul(vp, proj, view);
@@ -358,6 +737,8 @@ void render_frame(const float view[16], const float proj[16],
      * u_center is passed as camera-relative below, so float32 cancellation
      * at large world-space distances is avoided — same pattern as dots/trails. */
     glUniformMatrix4fv(s_sp_vp,       1, GL_FALSE, vp_camrel);
+    glUniform1f(s_sp_aspect, aspect);
+    glUniform2f(s_sp_screen, (float)WIN_W, (float)WIN_H);
     glUniform3f(s_sp_sun_world,  sun_wx, sun_wy, sun_wz);
     glUniform3f(s_sp_cam_right,  cam_right[0], cam_right[1], cam_right[2]);
     glUniform3f(s_sp_cam_up,     cam_up[0],    cam_up[1],    cam_up[2]);
@@ -460,6 +841,8 @@ void render_frame(const float view[16], const float proj[16],
      * Uses the same sphere billboard VAO and camera-relative VP as the sphere pass. */
     if (s_atm_shader) {
         glUseProgram(s_atm_shader);
+        glUniform1f(s_at_aspect, aspect);
+        glUniform2f(s_at_screen, (float)WIN_W, (float)WIN_H);
         glUniformMatrix4fv(s_at_vp, 1, GL_FALSE, vp_camrel);
         glUniform3f(s_at_cam_right, cam_right[0], cam_right[1], cam_right[2]);
         glUniform3f(s_at_cam_up,    cam_up[0],    cam_up[1],    cam_up[2]);
@@ -516,7 +899,8 @@ void render_frame(const float view[16], const float proj[16],
      * Priority: Sun(0) > planets > moons. Within each tier: closer first.
      * Overlap check in screen space: two dots clash if their centres are
      * closer than DOT_EXCL_PX pixels.                                      */
-#define DOT_EXCL_PX 6.0f   /* exclusion radius in pixels */
+#define DOT_EXCL_PX 6.0f       /* fully separated at this screen distance */
+#define DOT_HIDE_PX 2.5f       /* fully hidden when centers nearly overlap */
 
     /* Build priority order: stars (by dcam) > planets (by dcam) > moons (by dcam).
      * Stars must come first so they always win the screen-space overlap slot over
@@ -565,7 +949,11 @@ void render_frame(const float view[16], const float proj[16],
      * precision → star screen positions jump randomly on each frame →
      * visible as jerky "camera stutter" when moving at interstellar distances. */
     float dot_sx[MAX_BODIES], dot_sy[MAX_BODIES];
+    float dot_overlap_alpha[MAX_BODIES];
+    int   dot_candidate[MAX_BODIES];
     int   dot_vis[MAX_BODIES];
+    memset(dot_overlap_alpha, 0, sizeof(dot_overlap_alpha));
+    memset(dot_candidate, 0, sizeof(dot_candidate));
     memset(dot_vis, 0, sizeof(dot_vis));
 
     {
@@ -599,17 +987,28 @@ void render_frame(const float view[16], const float proj[16],
 
             float sx, sy;
             if (!mat4_project(vp_camrel, rx, ry, rz, WIN_W, WIN_H, &sx, &sy)) continue;
+            dot_candidate[i] = 1;
 
-            /* Check against all already-accepted dots */
-            int blocked = 0;
+            /* Fade overlap by screen distance instead of by elapsed time.
+             * Higher-priority dots still reserve the slot; lower-priority dots
+             * become transparent as their centers approach that slot. */
+            float overlap_alpha = 1.0f;
+            float nearest2 = DOT_EXCL_PX * DOT_EXCL_PX;
             for (int oj = 0; oj < oi; oj++) {
                 int j = dot_order[oj];
                 if (!dot_vis[j]) continue;
                 float dx = sx - dot_sx[j], dy = sy - dot_sy[j];
-                if (dx*dx + dy*dy < DOT_EXCL_PX * DOT_EXCL_PX)
-                    { blocked = 1; break; }
+                float d2 = dx*dx + dy*dy;
+                if (d2 < nearest2) nearest2 = d2;
             }
-            if (!blocked) {
+
+            if (nearest2 < DOT_EXCL_PX * DOT_EXCL_PX) {
+                float d = sqrtf(nearest2);
+                overlap_alpha = (float)smoothstepd(DOT_HIDE_PX, DOT_EXCL_PX, d);
+            }
+
+            dot_overlap_alpha[i] = overlap_alpha;
+            if (overlap_alpha >= 0.999f) {
                 dot_sx[i]  = sx;
                 dot_sy[i]  = sy;
                 dot_vis[i] = 1;
@@ -660,11 +1059,12 @@ void render_frame(const float view[16], const float proj[16],
 
         for (int oi = 0; oi < g_nbodies; oi++) {
             int i = dot_order[oi];
-            if (!dot_vis[i]) continue;
+            if (!dot_candidate[i] || dot_overlap_alpha[i] <= 0.001f) continue;
             Body *b = &g_bodies[i];
 
             /* LOD fade: star always full; planets/moons fade in interstellar space */
             float f = b->is_star ? 1.0f : dot_fade;
+            f *= dot_overlap_alpha[i];
             f *= body_point_star_glare_visibility(i);
 
             if (b->is_star) {
@@ -784,20 +1184,34 @@ void render_frame(const float view[16], const float proj[16],
         glDisable(GL_BLEND);
     }
 
+    /* ------------------------------------------------------------------ 6.5. Build preview */
+    render_build_preview(vp_camrel);
+
     /* ------------------------------------------------------------------ 7. Labels */
     labels_render(view_rot, proj, vp_camrel, info, dt);
 }
 
 /* ------------------------------------------------------------------ shutdown */
 void render_shutdown(void) {
+    for (int i = 0; i < 3; i++)
+        if (s_build_dist_text[i].tex) glDeleteTextures(1, &s_build_dist_text[i].tex);
+    if (s_build_font) TTF_CloseFont(s_build_font);
     glDeleteProgram(s_sphere_shader);
     glDeleteProgram(s_atm_shader);
     glDeleteProgram(s_dot_shader);
     glDeleteProgram(s_glare_shader);
+    glDeleteProgram(s_build_line_shader);
+    glDeleteProgram(s_build_ui_shader);
     glDeleteBuffers(1, &s_sphere_vbo);
     glDeleteBuffers(1, &s_sphere_ebo);
     glDeleteVertexArrays(1, &s_sphere_vao);
     glDeleteBuffers(1, &s_dot_vbo);
     glDeleteVertexArrays(1, &s_dot_vao);
+    glDeleteBuffers(1, &s_build_line_vbo);
+    glDeleteVertexArrays(1, &s_build_line_vao);
+    glDeleteBuffers(1, &s_build_ui_vbo);
+    glDeleteVertexArrays(1, &s_build_ui_vao);
     s_sphere_shader = s_dot_shader = 0;
+    s_build_line_shader = s_build_ui_shader = 0;
+    s_build_font = NULL;
 }

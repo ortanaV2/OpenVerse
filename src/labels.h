@@ -15,6 +15,9 @@ typedef struct {
 /* Initialise SDL_ttf, load font, pre-render name textures */
 void labels_init(void);
 
+/* Create/update the cached text texture for a runtime-added body. */
+void labels_add_body(int body_idx);
+
 /*
  * Render labels for all bodies.
  *   view  — view matrix (for extracting camera right/up)
