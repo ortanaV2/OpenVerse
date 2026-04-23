@@ -4,12 +4,13 @@
 #pragma once
 #include "common.h"
 
-#define COLLISION_MAX_SPOTS 4
+#define COLLISION_MAX_SPOTS 16
 
 typedef enum {
-    COLLISION_VIS_CRATER = 1,
-    COLLISION_VIS_MAJOR  = 2,
-    COLLISION_VIS_MERGE  = 3
+    COLLISION_VIS_CRATER    = 1,
+    COLLISION_VIS_MAJOR     = 2,
+    COLLISION_VIS_MERGE     = 3,
+    COLLISION_VIS_INTERSECT = 4  /* live sphere-sphere boundary during merge */
 } CollisionVisualKind;
 
 typedef struct {
@@ -24,3 +25,6 @@ void collision_step(double dt);
 int  collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPOTS]);
 void collision_on_body_added(int body_idx);
 double collision_visual_radius(int body_idx, double physical_radius);
+void collision_body_heat_glow(int body_idx, float out_color[3],
+                              float *out_intensity, float *out_scale);
+int collision_body_has_active_merge(int body_idx);

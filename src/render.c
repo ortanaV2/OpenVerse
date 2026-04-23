@@ -867,11 +867,11 @@ void render_frame(const float view[16], const float proj[16],
                 kinds[k] = spots[k].kind;
             }
             glUniform1i(s_sp_impact_count, nspots);
-            glUniform3fv(s_sp_impact_dir, COLLISION_MAX_SPOTS, dirs);
-            glUniform1fv(s_sp_impact_rad, COLLISION_MAX_SPOTS, radii);
-            glUniform1fv(s_sp_impact_heat, COLLISION_MAX_SPOTS, heats);
-            glUniform1fv(s_sp_impact_prog, COLLISION_MAX_SPOTS, progress);
-            glUniform1iv(s_sp_impact_kind, COLLISION_MAX_SPOTS, kinds);
+            glUniform3fv(s_sp_impact_dir, nspots, dirs);
+            glUniform1fv(s_sp_impact_rad, nspots, radii);
+            glUniform1fv(s_sp_impact_heat, nspots, heats);
+            glUniform1fv(s_sp_impact_prog, nspots, progress);
+            glUniform1iv(s_sp_impact_kind, nspots, kinds);
         }
 
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
@@ -899,9 +899,28 @@ void render_frame(const float view[16], const float proj[16],
         for (int i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].alive) continue;
             if (info[i].show) continue;     /* sub-pixel body — skip */
+            if (collision_body_has_active_merge(i)) continue;
             float intensity = g_bodies[i].atm_intensity;
             float scale     = g_bodies[i].atm_scale;
-            if (intensity <= 0.0f) continue;
+            float glow_color[3];
+            float glow_intensity = 0.0f;
+            float glow_scale = 1.0f;
+            float final_color[3];
+            float final_intensity;
+            float final_scale;
+            collision_body_heat_glow(i, glow_color, &glow_intensity, &glow_scale);
+            final_intensity = intensity + glow_intensity;
+            final_scale = glow_scale > scale ? glow_scale : scale;
+            if (final_intensity <= 0.0f) continue;
+            {
+                float base_w = intensity;
+                float glow_w = glow_intensity;
+                float sum_w = base_w + glow_w;
+                if (sum_w <= 1e-6f) sum_w = 1.0f;
+                final_color[0] = (g_bodies[i].atm_color[0] * base_w + glow_color[0] * glow_w) / sum_w;
+                final_color[1] = (g_bodies[i].atm_color[1] * base_w + glow_color[1] * glow_w) / sum_w;
+                final_color[2] = (g_bodies[i].atm_color[2] * base_w + glow_color[2] * glow_w) / sum_w;
+            }
 
             Body *b = &g_bodies[i];
             double cam_mx = (double)g_cam.pos[0] * AU;
@@ -921,15 +940,15 @@ void render_frame(const float view[16], const float proj[16],
             }
 
             float planet_r = info[i].dr;
-            float atm_r    = planet_r * scale;
+            float atm_r    = planet_r * final_scale;
 
             glUniform3f(s_at_center,   -oc_x, -oc_y, -oc_z);
             glUniform1f(s_at_radius,    atm_r);
             glUniform1f(s_at_planet_r,  planet_r);
             glUniform3f(s_at_oc,        oc_x, oc_y, oc_z);
             glUniform3f(s_at_sun_rel,   sr_x, sr_y, sr_z);
-            glUniform3f(s_at_color,     g_bodies[i].atm_color[0], g_bodies[i].atm_color[1], g_bodies[i].atm_color[2]);
-            glUniform1f(s_at_intensity, intensity);
+            glUniform3f(s_at_color,     final_color[0], final_color[1], final_color[2]);
+            glUniform1f(s_at_intensity, final_intensity);
             glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
         }
 

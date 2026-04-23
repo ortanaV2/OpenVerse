@@ -41,11 +41,11 @@ uniform float u_rotation;     /* body rotation angle, radians           */
 uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
 uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
 uniform int   u_impact_count;
-uniform vec3  u_impact_dir[4];
-uniform float u_impact_radius[4];
-uniform float u_impact_heat[4];
-uniform float u_impact_progress[4];
-uniform int   u_impact_kind[4];
+uniform vec3  u_impact_dir[16];
+uniform float u_impact_radius[16];
+uniform float u_impact_heat[16];
+uniform float u_impact_progress[16];
+uniform int   u_impact_kind[16];
 
 out vec4 frag_color;
 
@@ -75,6 +75,26 @@ float vnoise(vec3 p) {
 float fbm(vec3 p) {
     return vnoise(p)               * 0.65
          + vnoise(p * 2.1 + vec3(7.3, 2.1, 5.8)) * 0.35;
+}
+
+vec3 lava_color(float heat)
+{
+    heat = clamp(heat, 0.0, 1.0);
+
+    if (heat < 0.33) {
+        float t = heat / 0.33;
+        return mix(vec3(0.10, 0.025, 0.02), vec3(0.42, 0.06, 0.02), t);
+    }
+    if (heat < 0.72) {
+        float t = (heat - 0.33) / 0.39;
+        return mix(vec3(0.42, 0.06, 0.02), vec3(0.88, 0.30, 0.06), t);
+    }
+    if (heat < 0.92) {
+        float t = (heat - 0.72) / 0.20;
+        return mix(vec3(0.88, 0.30, 0.06), vec3(0.98, 0.58, 0.14), t);
+    }
+
+    return mix(vec3(0.98, 0.58, 0.14), vec3(1.00, 0.80, 0.34), (heat - 0.92) / 0.08);
 }
 
 /* ======================================================================
@@ -251,7 +271,7 @@ void main() {
 
     vec3 surface = surface_color(NL);
     vec3 lava_emit = vec3(0.0);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 16; i++) {
         if (i >= u_impact_count) break;
         vec3 idir = normalize(u_impact_dir[i]);
         float ang = acos(clamp(dot(NL, idir), -1.0, 1.0));
@@ -265,10 +285,13 @@ void main() {
                    * (1.0 - smoothstep(rad * 0.72, rad * 1.02, ang));
         float outer = smoothstep(rad * 0.72, rad * 1.30, ang)
                     * (1.0 - smoothstep(rad * 1.30, rad * 1.85, ang));
-        vec3 lava_hot = vec3(1.0, 0.94, 0.62);
-        vec3 lava_molten = vec3(1.0, 0.42, 0.08);
-        vec3 lava_deep = vec3(0.48, 0.06, 0.02);
-        vec3 lava = mix(lava_deep, lava_hot, core * 0.75 + (1.0 - progress) * 0.25);
+        float lava_noise = fbm(NL * 10.5 + idir * 4.0 + vec3(progress * 5.0, progress * 2.2, progress * 3.7));
+        float lava_var = (lava_noise - 0.5) * 0.22;
+        vec3 lava_hot = lava_color(clamp(min(1.0, heat * 1.02 + 0.06) + lava_var * 0.55, 0.0, 1.0));
+        vec3 lava_molten = lava_color(clamp(min(1.0, heat * 0.82 + 0.08) + lava_var * 0.45, 0.0, 1.0));
+        vec3 lava_warm = lava_color(clamp(heat * 0.58 + lava_var * 0.30, 0.0, 1.0));
+        vec3 lava_deep = lava_color(clamp(heat * 0.34 + lava_var * 0.18, 0.0, 1.0));
+        vec3 lava = mix(lava_warm, lava_hot, core * 0.75 + (1.0 - progress) * 0.25);
 
         if (kind == 1) {
             float crater_floor = 1.0 - smoothstep(0.0, rad * 0.72, ang);
@@ -282,13 +305,28 @@ void main() {
             surface = mix(surface, surface * 0.18, ring * heat * 0.72 + ash);
             surface = mix(surface, mix(lava_deep, lava_hot, core), melt * heat * 0.88);
             lava_emit += lava * (core * 1.8 + melt * 0.9 + outer * 0.35) * heat;
-        } else {
+        } else if (kind == 3) {
             float flood = 1.0 - smoothstep(0.0, rad * 1.08, ang);
             float seam = ring * (0.55 + 0.35 * (1.0 - progress));
             surface = mix(surface, surface * 0.20, seam * 0.55);
-            surface = mix(surface, mix(lava_deep, lava_hot, flood), flood * (0.45 + heat * 0.55));
-            lava_emit += mix(lava_molten, lava_hot, flood) *
+            surface = mix(surface, mix(lava_deep, lava_molten, flood), flood * (0.45 + heat * 0.55));
+            lava_emit += mix(lava_warm, lava_molten, flood) *
                          (flood * 1.75 + seam * 0.65 + outer * 0.25) * heat;
+        } else if (kind == 4) {
+            /* Live sphere-sphere intersection boundary.
+             * rad = angular radius of the buried cap on this sphere.
+             * Render the cap as molten lava with a bright ring at the edge. */
+            float inside_cap  = 1.0 - smoothstep(rad * 0.80, rad * 1.05, ang);
+            float edge_ring   = smoothstep(rad * 0.68, rad * 0.92, ang)
+                              * (1.0 - smoothstep(rad * 0.92, rad * 1.20, ang));
+            float outer_fringe = smoothstep(rad * 0.98, rad * 1.30, ang)
+                               * (1.0 - smoothstep(rad * 1.30, rad * 1.95, ang));
+
+            surface = mix(surface, mix(lava_deep, lava_molten, inside_cap * 0.7),
+                          inside_cap * heat * 0.88);
+            lava_emit += mix(lava_warm, lava_molten, inside_cap) * inside_cap * heat * 1.65;
+            lava_emit += lava_molten * edge_ring * heat * 1.8;
+            lava_emit += lava_warm * outer_fringe * heat * 0.9;
         }
     }
 
