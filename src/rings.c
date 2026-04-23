@@ -64,6 +64,28 @@ static void build_basis(ParticleDisc *d, float obl_deg)
     d->pole[0] = 0.0f; d->pole[1] = cosf(obl); d->pole[2] = sinf(obl);
 }
 
+static void retune_disc_parent(ParticleDisc *d, int parent_idx)
+{
+    if (!d || parent_idx < 0 || parent_idx >= g_nbodies) return;
+    d->parent_idx = parent_idx;
+    build_basis(d, (float)g_bodies[parent_idx].obliquity);
+
+    double gm = G_CONST * g_bodies[parent_idx].mass;
+    if (gm <= 0.0) {
+        d->initialized = 0;
+        return;
+    }
+    for (int i = 0; i < d->n_full; i++) {
+        double a_m = (double)d->data_full[i*8+1] * AU;
+        d->n_arr_full[i] = (float)sqrt(gm / (a_m * a_m * a_m));
+    }
+    for (int i = 0; i < d->n_lod; i++) {
+        double a_m = (double)d->data_lod[i*8+1] * AU;
+        d->n_arr_lod[i] = (float)sqrt(gm / (a_m * a_m * a_m));
+    }
+    d->initialized = 1;
+}
+
 /* ── bake_particles ─────────────────────────────────────────────────── */
 static void bake_particles(float *data, float *n_arr, int n,
                             const Zone *zones, int n_zones,
@@ -384,6 +406,8 @@ void rings_tick(double dt)
     for (int d = 0; d < s_n_discs; d++) {
         ParticleDisc *disc = &s_discs[d];
         if (!disc->initialized) continue;
+        if (disc->parent_idx < 0 || disc->parent_idx >= g_nbodies) continue;
+        if (!g_bodies[disc->parent_idx].alive) continue;
 
         for (int i = 0; i < disc->n_full; i++) {
             float M = disc->data_full[i*8+0]
@@ -403,8 +427,38 @@ void rings_tick(double dt)
 void rings_render(const float vp[16])
 {
     for (int d = 0; d < s_n_discs; d++) {
-        if (s_discs[d].initialized)
+        if (s_discs[d].initialized &&
+            s_discs[d].parent_idx >= 0 &&
+            s_discs[d].parent_idx < g_nbodies &&
+            g_bodies[s_discs[d].parent_idx].alive)
             render_disc(&s_discs[d], vp);
+    }
+}
+
+void rings_on_body_absorbed(int target_idx, int impactor_idx)
+{
+    for (int d = 0; d < s_n_discs; d++) {
+        ParticleDisc *disc = &s_discs[d];
+        if (!disc->initialized) continue;
+
+        if (disc->parent_idx == impactor_idx) {
+            int target_has_ring = 0;
+            for (int k = 0; k < s_n_discs; k++) {
+                if (k == d || !s_discs[k].initialized) continue;
+                if (s_discs[k].parent_idx == target_idx) {
+                    target_has_ring = 1;
+                    break;
+                }
+            }
+            if (target_has_ring || target_idx < 0 || target_idx >= g_nbodies ||
+                !g_bodies[target_idx].alive || g_bodies[target_idx].is_star) {
+                disc->initialized = 0;
+            } else {
+                retune_disc_parent(disc, target_idx);
+            }
+        } else if (disc->parent_idx == target_idx) {
+            retune_disc_parent(disc, target_idx);
+        }
     }
 }
 

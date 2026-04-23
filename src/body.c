@@ -161,7 +161,7 @@ int nearest_star_idx(void)
     double best_d2 = 1e300;
     int i;
     for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].is_star) continue;
+        if (!g_bodies[i].alive || !g_bodies[i].is_star) continue;
         double dx = g_cam.pos[0] - g_bodies[i].pos[0] * RS;
         double dy = g_cam.pos[1] - g_bodies[i].pos[1] * RS;
         double dz = g_cam.pos[2] - g_bodies[i].pos[2] * RS;
@@ -169,4 +169,64 @@ int nearest_star_idx(void)
         if (d2 < best_d2) { best_d2 = d2; best = i; }
     }
     return best;
+}
+
+int body_root_star(int i)
+{
+    if (i < 0 || i >= g_nbodies) return -1;
+    while (g_bodies[i].parent >= 0) {
+        i = g_bodies[i].parent;
+        if (i < 0 || i >= g_nbodies) return -1;
+    }
+    return i;
+}
+
+void body_world_to_local_surface_dir(int body_idx, const double world_dir[3],
+                                     float out[3])
+{
+    Body *b;
+    double n[3];
+    double len, co, so, tx, ty, tz, cr, sr;
+    float flen;
+
+    if (!out || body_idx < 0 || body_idx >= g_nbodies) return;
+
+    b = &g_bodies[body_idx];
+    n[0] = world_dir[0];
+    n[1] = world_dir[1];
+    n[2] = world_dir[2];
+    len = sqrt(n[0]*n[0] + n[1]*n[1] + n[2]*n[2]);
+    if (len <= 1e-12) {
+        out[0] = 1.0f;
+        out[1] = 0.0f;
+        out[2] = 0.0f;
+        return;
+    }
+
+    n[0] /= len;
+    n[1] /= len;
+    n[2] /= len;
+
+    co = cos(b->obliquity * PI / 180.0);
+    so = sin(b->obliquity * PI / 180.0);
+    tx =  co * n[0] - so * n[1];
+    ty =  so * n[0] + co * n[1];
+    tz =  n[2];
+
+    cr = cos(-b->rotation_angle);
+    sr = sin(-b->rotation_angle);
+    out[0] = (float)(tx * cr - tz * sr);
+    out[1] = (float)ty;
+    out[2] = (float)(tx * sr + tz * cr);
+
+    flen = sqrtf(out[0]*out[0] + out[1]*out[1] + out[2]*out[2]);
+    if (flen <= 1e-8f) {
+        out[0] = 1.0f;
+        out[1] = 0.0f;
+        out[2] = 0.0f;
+        return;
+    }
+    out[0] /= flen;
+    out[1] /= flen;
+    out[2] /= flen;
 }

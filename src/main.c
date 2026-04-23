@@ -31,6 +31,10 @@
 #include "asteroids.h"
 #include "ui.h"
 #include "build.h"
+#include "collision.h"
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 /* ------------------------------------------------------------------ globals */
 static SDL_Window   *s_win = NULL;
@@ -51,7 +55,7 @@ static const double SPEED_TABLE[] = {
     0.0,
     0.1, 0.25, 0.5,
     1.0, 2.0, 5.0, 10.0, 30.0, 60.0, 100.0,
-    365.0, 730.0, 1825.0, 3650.0
+    365.0
 };
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */
@@ -330,24 +334,36 @@ int main(int argc, char **argv) {
     labels_init();
     ui_init();
     build_init();
+    physics_refresh_timestep_model();
 
     /* Trail warm-up: pre-simulate 2 years using RESPA.
      * 730 outer steps × 50 inner steps = 36 500 inner steps total —
      * identical resolution to the old 0.02-day loop but ~20× faster
      * because slow forces are only evaluated at the outer (1-day) rate. */
     {
-        const double STEP_OUTER  = DAY * 1.0;
-        const double STEP_INNER  = DAY * 0.02;
-        const int    N_INNER     = 50;
-        const int    OUTER_TOTAL = (int)(365.0 * 2.0 / 1.0);
-        for (int o = 0; o < OUTER_TOTAL; o++) {
-            physics_respa_begin(STEP_OUTER);
-            for (int i = 0; i < N_INNER; i++) {
-                physics_respa_inner(STEP_INNER);
-                trails_tick(STEP_INNER);
+        const double WARMUP_DT = 365.0 * 2.0 * DAY;
+        int sys_n = physics_system_count();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+        for (int s = 0; s < sys_n; s++) {
+            double step_outer = physics_system_outer_dt_limit(s);
+            double step_inner = physics_system_inner_dt_limit(s);
+            int n_inner = (int)(step_outer / step_inner) + 1;
+            int outer_total = (int)(WARMUP_DT / step_outer);
+            int root = physics_system_root(s);
+            for (int o = 0; o < outer_total; o++) {
+                double dt_outer = WARMUP_DT / outer_total;
+                double dt_inner = dt_outer / n_inner;
+                physics_respa_begin_system(root, dt_outer);
+                for (int i = 0; i < n_inner; i++) {
+                    physics_respa_inner_system(root, dt_inner);
+                    trails_tick_system(root, dt_inner);
+                }
+                physics_respa_end_system(root, dt_outer);
             }
-            physics_respa_end(STEP_OUTER);
         }
+        physics_advance_time(WARMUP_DT);
     }
 
     /* Timing */
@@ -387,29 +403,48 @@ int main(int argc, char **argv) {
          * total distance is identical whether we call it N×(dt/N) or 1×dt —
          * this gives ~50× fewer sqrt calls with no change in sample spacing. */
         if (!g_paused && g_sim_speed > 0.0) {
-            const double DT_OUTER     = DAY * 1.0;
-            const double DT_INNER_MAX = DAY * 0.02;
-            const int    MAX_OUTER_STEPS = 120;   /* cap: ~120 sim-days / frame */
+            const int    MAX_OUTER_STEPS = 120;   /* per system cap */
+            physics_refresh_timestep_model();
+            {
+                int sys_n = physics_system_count();
+                double sim_dt = g_sim_speed * dt;
+                double effective_sim_dt = sim_dt;
 
-            double sim_dt = g_sim_speed * dt;
-            if (sim_dt > DT_OUTER * MAX_OUTER_STEPS)
-                sim_dt = DT_OUTER * MAX_OUTER_STEPS;
-
-            int    outer_steps = (int)(sim_dt / DT_OUTER) + 1;
-            double dt_outer    = sim_dt / outer_steps;
-            int    n_inner     = (int)(dt_outer / DT_INNER_MAX) + 1;
-            double dt_inner    = dt_outer / n_inner;
-
-            for (int o = 0; o < outer_steps; o++) {
-                physics_respa_begin(dt_outer);
-                for (int i = 0; i < n_inner; i++) {
-                    physics_respa_inner(dt_inner);
-                    trails_tick(dt_inner);   /* per inner step: captures intermediate positions */
+                for (int s = 0; s < sys_n; s++) {
+                    double dt_outer_max = physics_system_outer_dt_limit(s);
+                    double sys_cap = dt_outer_max * MAX_OUTER_STEPS;
+                    if (effective_sim_dt > sys_cap)
+                        effective_sim_dt = sys_cap;
                 }
-                physics_respa_end(dt_outer);
-                asteroids_step(dt_outer);   /* test-particle gravity */
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+                for (int s = 0; s < sys_n; s++) {
+                    double dt_outer_max = physics_system_outer_dt_limit(s);
+                    double dt_inner_max = physics_system_inner_dt_limit(s);
+                    int root = physics_system_root(s);
+                    double sys_dt = effective_sim_dt;
+
+                    int outer_steps = (int)(sys_dt / dt_outer_max) + 1;
+                    double dt_outer = sys_dt / outer_steps;
+                    int n_inner = (int)(dt_outer / dt_inner_max) + 1;
+                    double dt_inner = dt_outer / n_inner;
+
+                    for (int o = 0; o < outer_steps; o++) {
+                        physics_respa_begin_system(root, dt_outer);
+                        for (int i = 0; i < n_inner; i++) {
+                            physics_respa_inner_system(root, dt_inner);
+                            trails_tick_system(root, dt_inner);
+                        }
+                        physics_respa_end_system(root, dt_outer);
+                    }
+                }
+                physics_advance_time(effective_sim_dt);
+                collision_step(effective_sim_dt);
+                asteroids_step(effective_sim_dt);
+                rings_tick(effective_sim_dt);
             }
-            rings_tick(sim_dt);
         }
 
         /* Build matrices */

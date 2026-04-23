@@ -18,6 +18,9 @@ void labels_init(void);
 /* Create/update the cached text texture for a runtime-added body. */
 void labels_add_body(int body_idx);
 
+/* Disable and release the cached label for a removed/absorbed body. */
+void labels_remove_body(int body_idx);
+
 /*
  * Render labels for all bodies.
  *   view  — view matrix (for extracting camera right/up)

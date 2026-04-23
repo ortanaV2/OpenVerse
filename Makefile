@@ -11,20 +11,20 @@ SRCDIR  = src
 SRCS    = $(wildcard $(SRCDIR)/*.c)
 OBJS    = $(SRCS:.c=.o)
 
-CFLAGS  = -Wall -Wextra -O2 -std=c99 -I$(SRCDIR)
+CFLAGS  = -Wall -Wextra -O2 -std=c99 -I$(SRCDIR) -fopenmp
 
 # Auto-detect platform
 UNAME := $(shell uname -s 2>/dev/null || echo Windows)
 
 ifeq ($(UNAME), Linux)
     CFLAGS  += $(shell sdl2-config --cflags)
-    LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -lGL -lGLEW -lm
+    LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -lGL -lGLEW -lm -fopenmp
     EXT      =
 
 else ifeq ($(UNAME), Darwin)
     CFLAGS  += $(shell sdl2-config --cflags)
     LDFLAGS  = $(shell sdl2-config --libs) -lSDL2_ttf -lGLEW \
-               -framework OpenGL -lm
+               -framework OpenGL -lm -fopenmp
     EXT      =
 
 else
@@ -37,7 +37,7 @@ else
                -lSDL2 -lSDL2_ttf \
                -lglew32 \
                -lopengl32 -lglu32 \
-               -lm
+               -lm -fopenmp
     EXT      = .exe
 endif
 

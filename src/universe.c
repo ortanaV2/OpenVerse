@@ -86,6 +86,7 @@ static void read_color(const JsonNode *arr, float col[3])
 static void body_defaults(Body *bo)
 {
     memset(bo, 0, sizeof(*bo));
+    bo->alive     = 1;
     bo->parent    = -1;
     bo->atm_scale = 1.0f;
 }
@@ -136,12 +137,7 @@ static void read_atmosphere(const JsonNode *bn, Body *bo)
  *   Planets (parent=star) return the star in one hop.
  *   Moons  (parent=planet, parent=star) return the star in two hops.
  */
-static int root_star_of(int i)
-{
-    while (g_bodies[i].parent >= 0)
-        i = g_bodies[i].parent;
-    return i;
-}
+static int root_star_of(int i) { return body_root_star(i); }
 
 /* ------------------------------------------------------------------ public */
 
@@ -453,6 +449,34 @@ int universe_add_body(const BodyCreateSpec *spec)
     alloc_trail(bo);
 
     return idx;
+}
+
+void universe_rebind_to_nearest_stars(void)
+{
+    for (int i = 0; i < g_nbodies; i++) {
+        int best_star = -1;
+        double best_d2 = 1e300;
+
+        if (!g_bodies[i].alive || g_bodies[i].is_star) continue;
+        if (g_bodies[i].parent >= 0 && !g_bodies[g_bodies[i].parent].is_star)
+            continue;
+
+        for (int s = 0; s < g_nbodies; s++) {
+            double dx, dy, dz, d2;
+            if (!g_bodies[s].alive || !g_bodies[s].is_star) continue;
+            dx = g_bodies[s].pos[0] - g_bodies[i].pos[0];
+            dy = g_bodies[s].pos[1] - g_bodies[i].pos[1];
+            dz = g_bodies[s].pos[2] - g_bodies[i].pos[2];
+            d2 = dx*dx + dy*dy + dz*dz;
+            if (d2 < best_d2) {
+                best_d2 = d2;
+                best_star = s;
+            }
+        }
+
+        if (best_star >= 0)
+            g_bodies[i].parent = best_star;
+    }
 }
 
 void universe_shutdown(void)

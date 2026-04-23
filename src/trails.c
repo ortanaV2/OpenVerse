@@ -116,6 +116,45 @@ void trails_add_body(int body_idx)
     s_n = new_n;
 }
 
+void trails_remove_body(int body_idx)
+{
+    if (body_idx < 0 || body_idx >= s_n) return;
+    s_last_head[body_idx] = 0;
+    s_last_count[body_idx] = 0;
+    if (body_idx < g_nbodies) {
+        g_bodies[body_idx].trail_head = 0;
+        g_bodies[body_idx].trail_count = 0;
+        g_bodies[body_idx].trail_accum = 0.0;
+    }
+}
+
+void trails_reset_body(int body_idx)
+{
+    Body *b;
+    double x, y, z;
+
+    if (body_idx < 0 || body_idx >= g_nbodies) return;
+    b = &g_bodies[body_idx];
+    if (!b->trail) return;
+
+    x = b->pos[0] * RS;
+    y = b->pos[1] * RS;
+    z = b->pos[2] * RS;
+    for (int i = 0; i < TRAIL_LEN; i++) {
+        b->trail[i][0] = x;
+        b->trail[i][1] = y;
+        b->trail[i][2] = z;
+    }
+    b->trail_head = 2 % TRAIL_LEN;
+    b->trail_count = 2;
+    b->trail_accum = 0.0;
+
+    if (body_idx < s_n) {
+        s_last_head[body_idx] = -1;
+        s_last_count[body_idx] = -1;
+    }
+}
+
 void trails_render(const float vp[16])
 {
     if (!s_shader) return;
@@ -152,7 +191,7 @@ void trails_render(const float vp[16])
 
     for (int i = 0; i < g_nbodies && i < s_n; i++) {
         Body *b = &g_bodies[i];
-        if (b->is_star || b->trail_count < 2 || !b->trail) continue;
+        if (!b->alive || b->is_star || b->trail_count < 2 || !b->trail) continue;
 
         const int head  = b->trail_head;
         const int count = b->trail_count;

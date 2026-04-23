@@ -36,5 +36,8 @@ void universe_load(const char *path);
 /* Add a fully specified runtime body. Returns the new body index, or -1. */
 int universe_add_body(const BodyCreateSpec *spec);
 
+/* Reassign planets/dwarf bodies to the nearest star after sandbox edits. */
+void universe_rebind_to_nearest_stars(void);
+
 /* universe_shutdown — free all body trail buffers and the g_bodies array. */
 void universe_shutdown(void);

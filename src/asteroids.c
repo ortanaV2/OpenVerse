@@ -33,6 +33,9 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdio.h>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 #define GM_SUN_SI  1.327124e20   /* m³/s² */
 #define MAX_MAJOR  32            /* upper bound for major-body cache */
@@ -248,6 +251,7 @@ void asteroids_step(double dt) {
     double bx[MAX_MAJOR], by[MAX_MAJOR], bz[MAX_MAJOR], bgm[MAX_MAJOR];
     int nb = 0;
     for (int j = 0; j < g_nbodies && nb < MAX_MAJOR; j++) {
+        if (!g_bodies[j].alive) continue;
         /* skip moons (parent >= 0 and parent is not a star) */
         if (g_bodies[j].parent >= 0 &&
             !g_bodies[g_bodies[j].parent].is_star) continue;
@@ -262,6 +266,9 @@ void asteroids_step(double dt) {
         Belt *belt = &s_belts[b];
         if (!belt->initialized) continue;
 
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static)
+#endif
         for (int i = 0; i < belt->n; i++) {
             Particle *p = &belt->p[i];
 

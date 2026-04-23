@@ -126,6 +126,7 @@ static void nearest_body_distance_string(char *buf, size_t n)
     double best_d = 1e300;
 
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         double dx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
         double dy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
         double dz = g_bodies[i].pos[2] * RS - g_cam.pos[2];
@@ -140,6 +141,7 @@ static void nearest_body_distance_string(char *buf, size_t n)
         best = -1;
         best_d = 1e300;
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             if (!g_bodies[i].is_star) continue;
             double dx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
             double dy = g_bodies[i].pos[1] * RS - g_cam.pos[1];

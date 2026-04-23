@@ -8,6 +8,7 @@
 #include "body.h"
 #include "camera.h"
 #include "physics.h"
+#include "collision.h"
 #include "universe.h"
 #include "trails.h"
 #include "labels.h"
@@ -146,6 +147,7 @@ void build_nearest3(const double pos_m[3], int out_idx[3], double out_dist_au[3]
     }
 
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         double dx = g_bodies[i].pos[0] - pos_m[0];
         double dy = g_bodies[i].pos[1] - pos_m[1];
         double dz = g_bodies[i].pos[2] - pos_m[2];
@@ -169,6 +171,7 @@ void build_nearest3(const double pos_m[3], int out_idx[3], double out_dist_au[3]
         int idx[3] = {-1, -1, -1};
 
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             int is_moon = (g_bodies[i].parent >= 0 &&
                            !g_bodies[g_bodies[i].parent].is_star);
             int accept = 0;
@@ -233,6 +236,7 @@ void build_nearest3(const double pos_m[3], int out_idx[3], double out_dist_au[3]
         double best = DBL_MAX;
         int best_idx = -1;
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             int used = 0;
             for (int u = 0; u < 3; u++)
                 if (out_idx[u] == i) used = 1;
@@ -258,6 +262,7 @@ static int nearest_star(const double pos_m[3])
     int best_idx = -1;
     double best_d2 = DBL_MAX;
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         if (!g_bodies[i].is_star) continue;
         double dx = g_bodies[i].pos[0] - pos_m[0];
         double dy = g_bodies[i].pos[1] - pos_m[1];
@@ -276,6 +281,7 @@ static int nearest_nonstar(const double pos_m[3])
     int best_idx = -1;
     double best_d2 = DBL_MAX;
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         if (g_bodies[i].is_star) continue;
         double dx = g_bodies[i].pos[0] - pos_m[0];
         double dy = g_bodies[i].pos[1] - pos_m[1];
@@ -367,8 +373,12 @@ int build_place_current(void)
 
     int idx = universe_add_body(&spec);
     if (idx >= 0) {
+        if (p->is_star)
+            universe_rebind_to_nearest_stars();
         trails_add_body(idx);
+        trails_reset_body(idx);
         labels_add_body(idx);
+        collision_on_body_added(idx);
         fprintf(stdout, "[Build] placed '%s' at %.3f %.3f %.3f AU\n",
                 g_bodies[idx].name,
                 g_bodies[idx].pos[0] / AU,

@@ -27,6 +27,20 @@ extern int    g_paused;
 void physics_respa_begin(double dt_outer);  /* slow half-kick + prime fast acc  */
 void physics_respa_inner(double dt_inner);  /* fast KDK + drift all bodies      */
 void physics_respa_end  (double dt_outer);  /* slow half-kick + rotation + time */
+void physics_respa_begin_system(int root, double dt_outer);
+void physics_respa_inner_system(int root, double dt_inner);
+void physics_respa_end_system(int root, double dt_outer);
+
+void physics_refresh_timestep_model(void);
+
+/* Recommended maximum outer-step for slow-force stability. */
+double physics_outer_dt_limit(void);
+double physics_inner_dt_limit(void);
+int    physics_system_count(void);
+int    physics_system_root(int idx);
+double physics_system_outer_dt_limit(int idx);
+double physics_system_inner_dt_limit(int idx);
+void   physics_advance_time(double dt);
 
 /* Legacy single-step KDK (kept for reference / one-off use) */
 void physics_step(double dt);
@@ -34,3 +48,4 @@ void physics_step(double dt);
 /* Trail helpers */
 void trails_sample(void);
 void trails_tick(double dt);
+void trails_tick_system(int root, double dt);

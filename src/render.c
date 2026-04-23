@@ -17,6 +17,7 @@
 #include "asteroids.h"
 #include "labels.h"
 #include "build.h"
+#include "collision.h"
 #include "gl_utils.h"
 #include "math3d.h"
 #include <math.h>
@@ -47,6 +48,12 @@ static GLint  s_sp_sun_world   = -1;
 static GLint  s_sp_rotation    = -1;
 static GLint  s_sp_obliquity   = -1;
 static GLint  s_sp_ptype       = -1;
+static GLint  s_sp_impact_count = -1;
+static GLint  s_sp_impact_dir   = -1;
+static GLint  s_sp_impact_rad   = -1;
+static GLint  s_sp_impact_heat  = -1;
+static GLint  s_sp_impact_prog  = -1;
+static GLint  s_sp_impact_kind  = -1;
 
 /* Planet-type lookup by body name — robust against loader order changes.
  * 0=rocky(default)  1=Earth  2=Mars  3=Venus  4=Jupiter  5=Saturn
@@ -225,7 +232,7 @@ static float clampf_local(float v, float lo, float hi)
  * Bodies too small to see as a disc are rendered as dots instead. */
 static float visual_radius(int i, float dcam) {
     (void)dcam;
-    return (float)(g_bodies[i].radius * RS);
+    return (float)(collision_visual_radius(i, g_bodies[i].radius) * RS);
 }
 
 static double smoothstepd(double edge0, double edge1, double x) {
@@ -253,7 +260,7 @@ static float body_point_star_glare_visibility(int body_idx) {
     for (int i = 0; i < g_nbodies; i++) {
         if (i == body_idx) continue;
         Body *s = &g_bodies[i];
-        if (!s->is_star) continue;
+        if (!s->alive || !s->is_star) continue;
 
         double sx = s->pos[0] * RS - g_cam.pos[0];
         double sy = s->pos[1] * RS - g_cam.pos[1];
@@ -294,7 +301,7 @@ static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]
 
     for (int i = 0; i < g_nbodies; i++) {
         if (i == body_idx) continue;
-        if (g_bodies[i].is_star || info[i].show) continue;
+        if (!g_bodies[i].alive || g_bodies[i].is_star || info[i].show) continue;
 
         double sx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
         double sy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
@@ -344,6 +351,12 @@ void render_init(void) {
     s_sp_rotation  = glGetUniformLocation(s_sphere_shader, "u_rotation");
     s_sp_obliquity = glGetUniformLocation(s_sphere_shader, "u_obliquity");
     s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
+    s_sp_impact_count = glGetUniformLocation(s_sphere_shader, "u_impact_count");
+    s_sp_impact_dir   = glGetUniformLocation(s_sphere_shader, "u_impact_dir[0]");
+    s_sp_impact_rad   = glGetUniformLocation(s_sphere_shader, "u_impact_radius[0]");
+    s_sp_impact_heat  = glGetUniformLocation(s_sphere_shader, "u_impact_heat[0]");
+    s_sp_impact_prog  = glGetUniformLocation(s_sphere_shader, "u_impact_progress[0]");
+    s_sp_impact_kind  = glGetUniformLocation(s_sphere_shader, "u_impact_kind[0]");
 
     /* Frame-constant camera parameters */
     glUseProgram(s_sphere_shader);
@@ -754,6 +767,11 @@ void render_frame(const float view[16], const float proj[16],
 
     for (int i = 0; i < g_nbodies; i++) {
         Body *b = &g_bodies[i];
+        if (!b->alive) {
+            memset(&info[i], 0, sizeof(info[i]));
+            info[i].show = 1;
+            continue;
+        }
 
         float wx = (float)(b->pos[0] * RS);
         float wy = (float)(b->pos[1] * RS);
@@ -796,7 +814,7 @@ void render_frame(const float view[16], const float proj[16],
         info[i].show = (px < BODY_SPHERE_APPEAR_PX) ? 1 : 0;
 
         /* Sub-pixel bodies are shown as dots only — skip billboard render. */
-        if (info[i].show) continue;
+        if (!g_bodies[i].alive || info[i].show) continue;
         if (b->is_star) continue;
 
         /* Compute oc = cam - center in double to avoid float cancellation. */
@@ -831,6 +849,30 @@ void render_frame(const float view[16], const float proj[16],
         glUniform1f(s_sp_rotation,  (float)b->rotation_angle);
         glUniform1f(s_sp_obliquity, (float)(b->obliquity * (PI / 180.0)));
         glUniform1i(s_sp_ptype,     get_planet_type(b->name));
+        {
+            CollisionSpot spots[COLLISION_MAX_SPOTS];
+            float dirs[COLLISION_MAX_SPOTS * 3] = {0};
+            float radii[COLLISION_MAX_SPOTS] = {0};
+            float heats[COLLISION_MAX_SPOTS] = {0};
+            float progress[COLLISION_MAX_SPOTS] = {0};
+            int kinds[COLLISION_MAX_SPOTS] = {0};
+            int nspots = collision_spots_for_body(i, spots);
+            for (int k = 0; k < nspots; k++) {
+                dirs[k*3+0] = spots[k].dir[0];
+                dirs[k*3+1] = spots[k].dir[1];
+                dirs[k*3+2] = spots[k].dir[2];
+                radii[k] = spots[k].angular_radius;
+                heats[k] = spots[k].heat;
+                progress[k] = spots[k].progress;
+                kinds[k] = spots[k].kind;
+            }
+            glUniform1i(s_sp_impact_count, nspots);
+            glUniform3fv(s_sp_impact_dir, COLLISION_MAX_SPOTS, dirs);
+            glUniform1fv(s_sp_impact_rad, COLLISION_MAX_SPOTS, radii);
+            glUniform1fv(s_sp_impact_heat, COLLISION_MAX_SPOTS, heats);
+            glUniform1fv(s_sp_impact_prog, COLLISION_MAX_SPOTS, progress);
+            glUniform1iv(s_sp_impact_kind, COLLISION_MAX_SPOTS, kinds);
+        }
 
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
@@ -855,6 +897,7 @@ void render_frame(const float view[16], const float proj[16],
         glBindVertexArray(s_sphere_vao);
 
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             if (info[i].show) continue;     /* sub-pixel body — skip */
             float intensity = g_bodies[i].atm_intensity;
             float scale     = g_bodies[i].atm_scale;
@@ -911,6 +954,7 @@ void render_frame(const float view[16], const float proj[16],
     int dot_ns = 0, dot_np = 0, dot_nm = 0;
     int dot_stars[MAX_BODIES], dot_planets[MAX_BODIES], dot_moons[MAX_BODIES];
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         if      (g_bodies[i].is_star)       dot_stars  [dot_ns++] = i;
         /* planet: no parent, or parent is a star (not a moon of a planet) */
         else if (g_bodies[i].parent < 0 ||
@@ -938,6 +982,7 @@ void render_frame(const float view[16], const float proj[16],
     for (int i = 0; i < dot_ns; i++) dot_order[i]                  = dot_stars[i];
     for (int i = 0; i < dot_np; i++) dot_order[dot_ns + i]          = dot_planets[i];
     for (int i = 0; i < dot_nm; i++) dot_order[dot_ns + dot_np + i] = dot_moons[i];
+    int dot_total = dot_ns + dot_np + dot_nm;
 
     /* Project to screen, greedy overlap removal, collect surviving dots.
      *
@@ -962,8 +1007,9 @@ void render_frame(const float view[16], const float proj[16],
         double cy2 = g_cam.pos[1];
         double cz2 = g_cam.pos[2];
 
-        for (int oi = 0; oi < g_nbodies; oi++) {
+        for (int oi = 0; oi < dot_total; oi++) {
             int i = dot_order[oi];
+            if (!g_bodies[i].alive) continue;
             if (body_point_star_glare_visibility(i) <= 0.02f) continue;
             if (g_bodies[i].is_star &&
                 body_px[i] * STAR_GLARE_BILL_SCALE >= STAR_DOT_FADE_START_GLARE_PX) continue;
@@ -1057,8 +1103,9 @@ void render_frame(const float view[16], const float proj[16],
          * even at warp distances (far beyond the 2000 AU far plane).          */
         const float DOT_CLAMP_DIST = 1500.0f;
 
-        for (int oi = 0; oi < g_nbodies; oi++) {
+        for (int oi = 0; oi < dot_total; oi++) {
             int i = dot_order[oi];
+            if (!g_bodies[i].alive) continue;
             if (!dot_candidate[i] || dot_overlap_alpha[i] <= 0.001f) continue;
             Body *b = &g_bodies[i];
 
@@ -1155,6 +1202,7 @@ void render_frame(const float view[16], const float proj[16],
         glBindVertexArray(s_sphere_vao);
 
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             if (!g_bodies[i].is_star) continue;
 
             float rx = (float)(g_bodies[i].pos[0] * RS - g_cam.pos[0]);

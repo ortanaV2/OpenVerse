@@ -60,4 +60,5 @@ typedef struct {
 void rings_init(const char *path);
 void rings_tick(double dt);         /* advance mean anomalies — call each physics sub-step */
 void rings_render(const float vp[16]);
+void rings_on_body_absorbed(int target_idx, int impactor_idx);
 void rings_shutdown(void);

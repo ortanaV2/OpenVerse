@@ -14,8 +14,13 @@ typedef struct {
     double fast_acc[3];    /* m/s^2 dominant parent force, RESPA inner step */
     float  col[3];         /* RGB display colour              */
     int    is_star;
+    int    alive;           /* 0 = removed/absorbed; index kept stable */
     int    parent;         /* index of parent body (-1 = none)                  */
                            /* stars: -1; planets: star idx; moons: planet idx   */
+    double dyn_period;     /* s, estimated local orbital/dynamical period       */
+    double dyn_dt_outer;   /* s, recommended slow-force timestep ceiling         */
+    double dyn_dt_inner;   /* s, recommended parent-force timestep ceiling       */
+    int    dyn_bucket;     /* 0=slow .. 3=very fast                             */
 
     /* Rotation */
     double obliquity;       /* axial tilt in degrees (from ecliptic north)  */
@@ -53,6 +58,14 @@ void keplerian_to_state(
 
 /* Index of the star body nearest to the camera (camera.h must be included first). */
 int nearest_star_idx(void);
+
+/* Walk parent links to find the owning root star for a body. */
+int body_root_star(int i);
+
+/* Convert a world-space direction into the body's surface-local frame.
+ * This matches the local-space convention used by the planet shader. */
+void body_world_to_local_surface_dir(int body_idx, const double world_dir[3],
+                                     float out[3]);
 
 /* Planetocentric state from simple moon elements (a in km, angles in degrees). */
 void moon_to_state(

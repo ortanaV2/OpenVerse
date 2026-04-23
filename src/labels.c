@@ -163,7 +163,7 @@ void labels_init(void) {
     memset(s_hide_accum, 0, sizeof(s_hide_accum));
     memset(s_active,     0, sizeof(s_active));
     for (int i = 0; i < g_nbodies; i++)
-        build_label_texture(i);
+        if (g_bodies[i].alive) build_label_texture(i);
 }
 
 void labels_add_body(int body_idx)
@@ -173,6 +173,20 @@ void labels_add_body(int body_idx)
     s_hide_accum[body_idx] = 0.0f;
     s_active[body_idx] = 0;
     build_label_texture(body_idx);
+}
+
+void labels_remove_body(int body_idx)
+{
+    if (body_idx < 0 || body_idx >= MAX_BODIES) return;
+    s_show_accum[body_idx] = 0.0f;
+    s_hide_accum[body_idx] = 0.0f;
+    s_active[body_idx] = 0;
+    if (s_tex[body_idx]) {
+        glDeleteTextures(1, &s_tex[body_idx]);
+        s_tex[body_idx] = 0;
+    }
+    s_tex_w[body_idx] = 0;
+    s_tex_h[body_idx] = 0;
 }
 
 void labels_render(const float view[16], const float proj[16],
@@ -199,6 +213,7 @@ void labels_render(const float view[16], const float proj[16],
     for (int i = 0; i < g_nbodies; i++) {
         order[i]   = i;
         lvis[i]    = 0;
+        if (!g_bodies[i].alive) continue;
         if (!s_tex[i]) continue;
         /* Far cutoff: non-star labels are local-system annotations. */
         if (!g_bodies[i].is_star && info[i].dcam > MAX_LABEL_DIST) continue;
@@ -247,6 +262,7 @@ void labels_render(const float view[16], const float proj[16],
         int ns = 0, np = 0, nm = 0;
         int stars[MAX_BODIES], planets[MAX_BODIES], moons[MAX_BODIES];
         for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
             if      (g_bodies[i].is_star)       stars  [ns++] = i;
             /* planet: no parent, or parent is a star (not a moon of a planet) */
             else if (g_bodies[i].parent < 0 ||
@@ -275,14 +291,17 @@ void labels_render(const float view[16], const float proj[16],
         for (int i = 0; i < ns; i++) order[i]              = stars[i];
         for (int i = 0; i < np; i++) order[ns + i]          = planets[i];
         for (int i = 0; i < nm; i++) order[ns + np + i]     = moons[i];
+        for (int i = ns + np + nm; i < g_nbodies; i++) order[i] = -1;
     }
 
     /* ---- Step 3: greedy AABB overlap removal ---- */
     for (int i = 0; i < g_nbodies; i++) {
         int idx = order[i];
+        if (idx < 0) continue;
         if (!lvis[idx]) continue;
         for (int j = 0; j < i; j++) {
             int jdx = order[j];
+            if (jdx < 0) continue;
             if (!lvis[jdx]) continue;
             if (lsx[idx]          < lsx[jdx]+lsw[jdx] &&
                 lsx[idx]+lsw[idx] > lsx[jdx]           &&
@@ -295,6 +314,7 @@ void labels_render(const float view[16], const float proj[16],
 
     /* ---- Step 4: hysteresis — debounce lvis into s_active ---- */
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         if (lvis[i]) {
             s_show_accum[i] += dt;
             s_hide_accum[i]  = 0.0f;
@@ -322,6 +342,7 @@ void labels_render(const float view[16], const float proj[16],
     glBindVertexArray(s_vao);
 
     for (int i = 0; i < g_nbodies; i++) {
+        if (!g_bodies[i].alive) continue;
         if (!s_active[i]) continue;
         if (!s_tex[i])    continue;
 

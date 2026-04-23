@@ -40,6 +40,12 @@ uniform vec2  u_screen;
 uniform float u_rotation;     /* body rotation angle, radians           */
 uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
 uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
+uniform int   u_impact_count;
+uniform vec3  u_impact_dir[4];
+uniform float u_impact_radius[4];
+uniform float u_impact_heat[4];
+uniform float u_impact_progress[4];
+uniform int   u_impact_kind[4];
 
 out vec4 frag_color;
 
@@ -244,11 +250,52 @@ void main() {
     }
 
     vec3 surface = surface_color(NL);
+    vec3 lava_emit = vec3(0.0);
+    for (int i = 0; i < 4; i++) {
+        if (i >= u_impact_count) break;
+        vec3 idir = normalize(u_impact_dir[i]);
+        float ang = acos(clamp(dot(NL, idir), -1.0, 1.0));
+        float rad = max(u_impact_radius[i], 0.001);
+        float heat = clamp(u_impact_heat[i], 0.0, 1.0);
+        float progress = clamp(u_impact_progress[i], 0.0, 1.0);
+        int kind = u_impact_kind[i];
+        float core = 1.0 - smoothstep(0.0, rad * 0.30, ang);
+        float melt = 1.0 - smoothstep(rad * 0.10, rad * 0.98, ang);
+        float ring = smoothstep(rad * 0.48, rad * 0.72, ang)
+                   * (1.0 - smoothstep(rad * 0.72, rad * 1.02, ang));
+        float outer = smoothstep(rad * 0.72, rad * 1.30, ang)
+                    * (1.0 - smoothstep(rad * 1.30, rad * 1.85, ang));
+        vec3 lava_hot = vec3(1.0, 0.94, 0.62);
+        vec3 lava_molten = vec3(1.0, 0.42, 0.08);
+        vec3 lava_deep = vec3(0.48, 0.06, 0.02);
+        vec3 lava = mix(lava_deep, lava_hot, core * 0.75 + (1.0 - progress) * 0.25);
+
+        if (kind == 1) {
+            float crater_floor = 1.0 - smoothstep(0.0, rad * 0.72, ang);
+            float hot_rim = ring * (1.0 - progress * 0.65);
+            surface = mix(surface, surface * 0.12, crater_floor * 0.58);
+            surface = mix(surface, mix(lava_deep, lava_molten, core), core * heat * 0.72);
+            surface = mix(surface, vec3(0.08, 0.05, 0.04), ring * 0.32);
+            lava_emit += lava_molten * (core * 1.5 + hot_rim * 0.9) * heat;
+        } else if (kind == 2) {
+            float ash = outer * 0.35;
+            surface = mix(surface, surface * 0.18, ring * heat * 0.72 + ash);
+            surface = mix(surface, mix(lava_deep, lava_hot, core), melt * heat * 0.88);
+            lava_emit += lava * (core * 1.8 + melt * 0.9 + outer * 0.35) * heat;
+        } else {
+            float flood = 1.0 - smoothstep(0.0, rad * 1.08, ang);
+            float seam = ring * (0.55 + 0.35 * (1.0 - progress));
+            surface = mix(surface, surface * 0.20, seam * 0.55);
+            surface = mix(surface, mix(lava_deep, lava_hot, flood), flood * (0.45 + heat * 0.55));
+            lava_emit += mix(lava_molten, lava_hot, flood) *
+                         (flood * 1.75 + seam * 0.65 + outer * 0.25) * heat;
+        }
+    }
 
     /* ---- Phong diffuse ------------------------------------------------ */
     vec3  L     = normalize(u_sun_rel - hit_rel);
     float diff  = max(dot(N, L), 0.0);
     float light = u_ambient + (1.0 - u_ambient) * diff;
 
-    frag_color = vec4(surface * light, 1.0);
+    frag_color = vec4(surface * light + lava_emit, 1.0);
 }
