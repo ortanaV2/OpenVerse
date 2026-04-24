@@ -103,6 +103,24 @@ static int body_is_in_merge(int idx)
     return 0;
 }
 
+static int body_is_merge_target(int idx)
+{
+    for (int i = 0; i < MAX_MERGES; i++) {
+        if (!s_merges[i].active) continue;
+        if (s_merges[i].target == idx) return 1;
+    }
+    return 0;
+}
+
+static int body_is_merge_impactor(int idx)
+{
+    for (int i = 0; i < MAX_MERGES; i++) {
+        if (!s_merges[i].active) continue;
+        if (s_merges[i].impactor == idx) return 1;
+    }
+    return 0;
+}
+
 static void normalize3f(float v[3])
 {
     float len = sqrtf(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]);
@@ -140,6 +158,48 @@ static double fast_then_slow_spread(double t, double fast_window)
     return 0.82 * ease_out_cubic(fast_t) + 0.18 * ease_out_cubic(slow_t);
 }
 
+static double impact_heat_curve(const ImpactEvent *e, double t)
+{
+    if (!e) return 0.0;
+    if (e->kind == COLLISION_VIS_MERGE)
+        return pow(1.0 - t, 1.45);
+    if (e->kind == COLLISION_VIS_CRATER)
+        return pow(1.0 - t, 2.35);
+    if (e->kind == COLLISION_VIS_INTERSECT)
+        return pow(1.0 - t, 1.65);
+    return (1.0 - t) * (1.0 - t);
+}
+
+static double impact_spread_curve(const ImpactEvent *e, double t)
+{
+    if (!e) return 0.0;
+    if (e->kind == COLLISION_VIS_MERGE)
+        return fast_then_slow_spread(t, 0.09);
+    if (e->kind == COLLISION_VIS_INTERSECT)
+        return fast_then_slow_spread(t, 0.16);
+    if (e->kind == COLLISION_VIS_MAJOR)
+        return fast_then_slow_spread(t, 0.14);
+    return fast_then_slow_spread(t, 0.18);
+}
+
+static double active_merge_glow_progress(int body_idx)
+{
+    double best = 0.0;
+    for (int i = 0; i < MAX_MERGES; i++) {
+        double t, grow_t;
+        MergeEvent *m = &s_merges[i];
+        if (!m->active) continue;
+        if (m->target != body_idx && m->impactor != body_idx) continue;
+        if (m->duration <= 1e-6) return 1.0;
+        t = m->age / m->duration;
+        if (t < 0.0) t = 0.0;
+        if (t > 1.0) t = 1.0;
+        grow_t = 0.20 + 0.80 * ease_out_cubic(t);
+        if (grow_t > best) best = grow_t;
+    }
+    return best;
+}
+
 static double current_visual_radius(int body_idx, double physical_radius)
 {
     RadiusTransition *fx;
@@ -160,15 +220,18 @@ static void start_radius_transition(int body_idx, double old_radius,
 {
     RadiusTransition *fx;
     double start_radius;
+    int had_active_transition;
     if (body_idx < 0 || body_idx >= MAX_BODIES) return;
     fx = &s_radius_fx[body_idx];
+    had_active_transition = fx->active;
+    start_radius = current_visual_radius(body_idx, old_radius);
     fx->active = 1;
     fx->age = 0.0;
     fx->duration = fmax(duration, 1.0);
-    start_radius = current_visual_radius(body_idx, old_radius);
-    if (new_radius > 0.0 && start_radius < new_radius * 0.35)
+    if (!had_active_transition &&
+        new_radius > 0.0 && start_radius < new_radius * 0.35)
         start_radius = new_radius * 0.35;
-    if (start_radius < old_radius)
+    if (!had_active_transition && start_radius < old_radius)
         start_radius = old_radius;
     fx->start_radius = start_radius;
     fx->target_radius = new_radius;
@@ -357,7 +420,7 @@ static void update_merge_events(double dt)
                 if (cap > scar->radius0) {
                     float local_dir[3];
                     scar->radius0 = cap;
-                    scar->radius1 = cap;
+                    scar->radius1 = fminf((float)(PI * 0.88), fmaxf(scar->radius1, cap * 1.06f));
                     body_world_to_local_surface_dir(m->target, m->dir, local_dir);
                     normalize3f(local_dir);
                     scar->dir[0] = local_dir[0];
@@ -384,7 +447,7 @@ static void update_merge_events(double dt)
                     float local_dir[3];
                     double neg_dir[3] = {-m->dir[0], -m->dir[1], -m->dir[2]};
                     scar->radius0 = cap;
-                    scar->radius1 = cap;
+                    scar->radius1 = fminf((float)(PI * 0.88), fmaxf(scar->radius1, cap * 1.06f));
                     body_world_to_local_surface_dir(m->impactor, neg_dir, local_dir);
                     normalize3f(local_dir);
                     scar->dir[0] = local_dir[0];
@@ -406,7 +469,10 @@ static void update_merge_events(double dt)
                 if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
                     s_impacts[m->scar_slot].active && s_impacts[m->scar_slot].radius0 > 0.01f) {
                     float r0 = s_impacts[m->scar_slot].radius0;
-                    s_impacts[m->scar_slot].radius1 = fminf(r0 * 2.2f, (float)(PI * 0.88));
+                    float r1 = s_impacts[m->scar_slot].radius1;
+                    if (r1 < r0) r1 = r0;
+                    s_impacts[m->scar_slot].radius1 = fminf((float)(PI * 0.88),
+                                                            fmaxf(r1, r0 * 1.12f));
                 }
 
                 m->active = 0;
@@ -813,7 +879,7 @@ void collision_step(double dt)
             nb = member_count[other_root];
             for (int ai = 0; ai < na && !root_had_collision; ai++) {
                 int a = members[root][ai];
-                if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_in_merge(a)) continue;
+                if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_merge_impactor(a)) continue;
                 for (int bi = 0; bi < nb; bi++) {
                     int b = members[other_root][bi];
                     int lo, hi;
@@ -821,7 +887,7 @@ void collision_step(double dt)
 
                     if (same_root && bi <= ai) continue;
                     if (a == b) continue;
-                    if (!g_bodies[b].alive || g_bodies[b].is_star || resolved[b] || body_is_in_merge(b)) continue;
+                    if (!g_bodies[b].alive || g_bodies[b].is_star || resolved[b] || body_is_merge_impactor(b)) continue;
 
                     lo = a < b ? a : b;
                     hi = a < b ? b : a;
@@ -839,14 +905,29 @@ void collision_step(double dt)
                     }
 
                     {
-                        int target = g_bodies[a].mass >= g_bodies[b].mass ? a : b;
-                        int impactor = target == a ? b : a;
+                        int a_is_merge_target = body_is_merge_target(a);
+                        int b_is_merge_target = body_is_merge_target(b);
+                        int keep_target_open;
+                        int target;
+                        int impactor;
+                        if (a_is_merge_target && !b_is_merge_target)
+                            target = a;
+                        else if (b_is_merge_target && !a_is_merge_target)
+                            target = b;
+                        else
+                            target = g_bodies[a].mass >= g_bodies[b].mass ? a : b;
+                        impactor = target == a ? b : a;
                         absorb_body(target, impactor, speed, dt);
-                        resolved[target] = 1;
+                        keep_target_open = body_is_merge_target(target);
+                        if (!keep_target_open)
+                            resolved[target] = 1;
                         resolved[impactor] = 1;
                         s_pair_next[lo][hi] = HOT_PAIR_DT;
-                        root_had_collision = 1;
-                        break;
+                        if (!keep_target_open) {
+                            root_had_collision = 1;
+                            break;
+                        }
+                        if (impactor == a) break;
                     }
                 }
             }
@@ -870,21 +951,9 @@ int collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPO
         t = e->age / e->duration;
         if (t < 0.0) t = 0.0;
         if (t > 1.0) t = 1.0;
-        heat_curve = (1.0 - t) * (1.0 - t);
-        if (e->kind == COLLISION_VIS_MERGE)
-            heat_curve = pow(1.0 - t, 1.45);
-        else if (e->kind == COLLISION_VIS_CRATER)
-            heat_curve = pow(1.0 - t, 2.35);
+        heat_curve = impact_heat_curve(e, t);
         {
-            double spread_t;
-            if (e->kind == COLLISION_VIS_MERGE)
-                spread_t = fast_then_slow_spread(t, 0.09);
-            else if (e->kind == COLLISION_VIS_INTERSECT)
-                spread_t = fast_then_slow_spread(t, 0.07);
-            else if (e->kind == COLLISION_VIS_MAJOR)
-                spread_t = fast_then_slow_spread(t, 0.14);
-            else
-                spread_t = fast_then_slow_spread(t, 0.18);
+            double spread_t = impact_spread_curve(e, t);
             rad = e->radius0 + (e->radius1 - e->radius0) * ease_out_cubic(spread_t);
         }
         {
@@ -918,6 +987,7 @@ void collision_body_heat_glow(int body_idx, float out_color[3],
 {
     float best_heat = 0.0f;
     int has_merge = 0;
+    double merge_growth = active_merge_glow_progress(body_idx);
 
     if (out_color) {
         out_color[0] = 0.0f;
@@ -937,11 +1007,7 @@ void collision_body_heat_glow(int body_idx, float out_color[3],
         t = e->age / e->duration;
         if (t < 0.0) t = 0.0;
         if (t > 1.0) t = 1.0;
-        heat_curve = (1.0 - t) * (1.0 - t);
-        if (e->kind == COLLISION_VIS_MERGE)
-            heat_curve = pow(1.0 - t, 1.45);
-        else if (e->kind == COLLISION_VIS_CRATER)
-            heat_curve = pow(1.0 - t, 2.35);
+        heat_curve = impact_heat_curve(e, t);
         heat = e->heat0 * (float)heat_curve;
         if (heat > best_heat) best_heat = heat;
         if (e->kind == COLLISION_VIS_MERGE || e->kind == COLLISION_VIS_INTERSECT)
@@ -953,6 +1019,7 @@ void collision_body_heat_glow(int body_idx, float out_color[3],
     if (best_heat < 0.0f) best_heat = 0.0f;
     if (best_heat > 1.0f) best_heat = 1.0f;
     best_heat = best_heat * best_heat * (3.0f - 2.0f * best_heat);
+    if (merge_growth > 0.0) best_heat *= (float)merge_growth;
 
     if (out_color) {
         out_color[0] = 0.90f;

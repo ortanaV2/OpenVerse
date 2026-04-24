@@ -937,7 +937,6 @@ void render_frame(const float view[16], const float proj[16],
         for (int i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].alive) continue;
             if (info[i].show) continue;     /* sub-pixel body — skip */
-            if (collision_body_has_active_merge(i)) continue;
             float intensity = g_bodies[i].atm_intensity;
             float scale     = g_bodies[i].atm_scale;
             float glow_color[3];
