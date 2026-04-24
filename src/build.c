@@ -26,6 +26,7 @@ static int s_place_serial = 1;
 #define BUILD_PREVIEW_TARGET_PX   18.0
 #define BUILD_PREVIEW_MIN_AU      0.00035
 #define BUILD_PREVIEW_MAX_AU      18.0
+#define BUILD_PARENT_STAR_MAX_AU  250.0
 
 static const BuildPreset s_presets[] = {
     { "Rocky",    5.972e24,  6371.0e3,  {0.32f, 0.58f, 0.92f}, 0, 1, 0, {0.45f, 0.65f, 1.00f}, 0.45f, 1.25f },
@@ -276,6 +277,21 @@ static int nearest_star(const double pos_m[3])
     return best_idx;
 }
 
+static int nearest_star_within(const double pos_m[3], double max_dist_au)
+{
+    int idx = nearest_star(pos_m);
+    if (idx < 0) return -1;
+
+    {
+        double dx = g_bodies[idx].pos[0] - pos_m[0];
+        double dy = g_bodies[idx].pos[1] - pos_m[1];
+        double dz = g_bodies[idx].pos[2] - pos_m[2];
+        double d_au = sqrt(dx*dx + dy*dy + dz*dz) / AU;
+        if (d_au > max_dist_au) return -1;
+    }
+    return idx;
+}
+
 static int nearest_nonstar(const double pos_m[3])
 {
     int best_idx = -1;
@@ -365,9 +381,9 @@ int build_place_current(void)
         if (p->wants_nonstar_parent)
             spec.parent = nearest_nonstar(spec.pos);
         if (spec.parent < 0 && p->wants_planet_parent)
-            spec.parent = nearest_star(spec.pos);
+            spec.parent = nearest_star_within(spec.pos, BUILD_PARENT_STAR_MAX_AU);
         if (spec.parent < 0)
-            spec.parent = nearest_star(spec.pos);
+            spec.parent = nearest_star_within(spec.pos, BUILD_PARENT_STAR_MAX_AU);
         add_parent_velocity(&spec, spec.parent);
     }
 

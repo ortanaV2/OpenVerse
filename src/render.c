@@ -287,6 +287,44 @@ static float body_point_star_glare_visibility(int body_idx) {
     return (float)visibility;
 }
 
+static float system_dot_fade_for_body(int body_idx)
+{
+    int ref_star;
+    double sdx, sdy, sdz, dist_star;
+    float dot_fade;
+    const double FREE_DOT_FADE_START = 400.0;
+    const double FREE_DOT_FADE_END = 800.0;
+
+    if (body_idx < 0 || body_idx >= g_nbodies) return 1.0f;
+    if (g_bodies[body_idx].is_star) return 1.0f;
+
+    ref_star = body_root_star(body_idx);
+    if (ref_star < 0 || ref_star >= g_nbodies ||
+        !g_bodies[ref_star].alive || !g_bodies[ref_star].is_star) {
+        double bx = g_bodies[body_idx].pos[0] * RS - g_cam.pos[0];
+        double by = g_bodies[body_idx].pos[1] * RS - g_cam.pos[1];
+        double bz = g_bodies[body_idx].pos[2] * RS - g_cam.pos[2];
+        double dist_body = sqrt(bx*bx + by*by + bz*bz);
+
+        dot_fade = 1.0f - (float)((dist_body - FREE_DOT_FADE_START)
+                                / (FREE_DOT_FADE_END - FREE_DOT_FADE_START));
+        if (dot_fade > 1.0f) dot_fade = 1.0f;
+        if (dot_fade < 0.0f) dot_fade = 0.0f;
+        return dot_fade;
+    }
+
+    sdx = g_cam.pos[0] - g_bodies[ref_star].pos[0] * RS;
+    sdy = g_cam.pos[1] - g_bodies[ref_star].pos[1] * RS;
+    sdz = g_cam.pos[2] - g_bodies[ref_star].pos[2] * RS;
+    dist_star = sqrt(sdx*sdx + sdy*sdy + sdz*sdz);
+
+    dot_fade = 1.0f - (float)((dist_star - SYS_DOT_FADE_START)
+                            / (SYS_DOT_FADE_END - SYS_DOT_FADE_START));
+    if (dot_fade > 1.0f) dot_fade = 1.0f;
+    if (dot_fade < 0.0f) dot_fade = 0.0f;
+    return dot_fade;
+}
+
 static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]) {
     double bx = g_bodies[body_idx].pos[0] * RS - g_cam.pos[0];
     double by = g_bodies[body_idx].pos[1] * RS - g_cam.pos[1];
@@ -1081,25 +1119,6 @@ void render_frame(const float view[16], const float proj[16],
         }
     }
 
-    /* Distance from camera to nearest star — used for LOD dot fade.
-     * Non-star dots fade from opaque at SYS_DOT_FADE_START to transparent
-     * at SYS_DOT_FADE_END.  The star dot is handled by its own glare fade.
-     * Subtraction is done in double BEFORE casting to float to avoid the
-     * catastrophic float cancellation that occurs at 4+ ly (camera and star
-     * both at ~250,000 AU → float32 difference is meaningless).               */
-    float dot_fade = 1.0f;
-    {
-        int ref_star = nearest_star_idx();
-        float sdx = (float)(g_cam.pos[0] - g_bodies[ref_star].pos[0] * RS);
-        float sdy = (float)(g_cam.pos[1] - g_bodies[ref_star].pos[1] * RS);
-        float sdz = (float)(g_cam.pos[2] - g_bodies[ref_star].pos[2] * RS);
-        float dist_star = sqrtf(sdx*sdx + sdy*sdy + sdz*sdz);
-        dot_fade = 1.0f - (dist_star - SYS_DOT_FADE_START)
-                        / (SYS_DOT_FADE_END - SYS_DOT_FADE_START);
-        if (dot_fade > 1.0f) dot_fade = 1.0f;
-        if (dot_fade < 0.0f) dot_fade = 0.0f;
-    }
-
     /* Upload and draw surviving dots.
      * Positions are camera-relative (world_AU - cam_AU), matching the
      * convention used for trails and labels.  The dot shader is given
@@ -1129,7 +1148,7 @@ void render_frame(const float view[16], const float proj[16],
             Body *b = &g_bodies[i];
 
             /* LOD fade: star always full; planets/moons fade in interstellar space */
-            float f = b->is_star ? 1.0f : dot_fade;
+            float f = b->is_star ? 1.0f : system_dot_fade_for_body(i);
             f *= dot_overlap_alpha[i];
             f *= body_point_star_glare_visibility(i);
 

@@ -101,8 +101,7 @@ static int is_satellite(int i) {
 
 /* Any explicit parent-child pair is integrated at the inner cadence. */
 static int has_fast_parent(int i) {
-    if (!g_bodies[i].alive) return 0;
-    return g_bodies[i].parent >= 0;
+    return is_satellite(i);
 }
 
 void physics_refresh_timestep_model(void)
@@ -148,12 +147,12 @@ void physics_refresh_timestep_model(void)
             int slot = ensure_system_slot(root);
             if (slot >= 0) {
                 if (dt_outer < s_system_outer_dt[slot]) s_system_outer_dt[slot] = dt_outer;
-                if (b->parent >= 0 && dt_inner < s_system_inner_dt[slot]) s_system_inner_dt[slot] = dt_inner;
+                if (is_satellite(i) && dt_inner < s_system_inner_dt[slot]) s_system_inner_dt[slot] = dt_inner;
             }
         }
 
         if (dt_outer < best_outer) best_outer = dt_outer;
-        if (b->parent >= 0 && dt_inner < best_inner) best_inner = dt_inner;
+        if (is_satellite(i) && dt_inner < best_inner) best_inner = dt_inner;
     }
 
     s_outer_dt_limit = best_outer;
@@ -227,8 +226,10 @@ static void compute_acc_slow_system(int root) {
 
             /* skip satellite-satellite (negligible and expensive) */
             if (is_satellite(i) && is_satellite(j)) continue;
-            /* skip parent-satellite pair — handled by fast forces */
-            if (same_system && (is_ancestor_of(i, j) || is_ancestor_of(j, i))) continue;
+            /* skip only true moon-parent chains here — planet-star stays slow */
+            if (same_system &&
+                ((is_satellite(j) && is_ancestor_of(i, j)) ||
+                 (is_satellite(i) && is_ancestor_of(j, i)))) continue;
 
             dx = g_bodies[j].pos[0] - g_bodies[i].pos[0];
             dy = g_bodies[j].pos[1] - g_bodies[i].pos[1];

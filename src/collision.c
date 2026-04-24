@@ -730,11 +730,12 @@ static void absorb_body(int target, int impactor, double rel_speed, double colli
 
 void collision_step(double dt)
 {
-    int root_of[MAX_BODIES];
     double system_radius[MAX_BODIES];
     int resolved[MAX_BODIES] = {0};
     int members[MAX_BODIES][MAX_BODIES];
     int member_count[MAX_BODIES] = {0};
+    int active_roots[MAX_BODIES];
+    int active_root_count = 0;
     int any_dirty = 0;
 
     update_merge_events(dt);
@@ -772,14 +773,14 @@ void collision_step(double dt)
     if (!any_dirty) return;
 
     for (int i = 0; i < MAX_BODIES; i++) {
-        root_of[i] = -1;
         system_radius[i] = SYSTEM_MARGIN_AU * AU;
     }
     for (int i = 0; i < g_nbodies; i++) {
         if (!g_bodies[i].alive) continue;
         int root = body_root_star(i);
-        root_of[i] = root;
         if (root < 0 || root >= g_nbodies) continue;
+        if (member_count[root] == 0 && active_root_count < MAX_BODIES)
+            active_roots[active_root_count++] = root;
         if (member_count[root] < MAX_BODIES)
             members[root][member_count[root]++] = i;
         double dx = g_bodies[i].pos[0] - g_bodies[root].pos[0];
@@ -797,41 +798,56 @@ void collision_step(double dt)
             continue;
         }
 
-        int n = member_count[root];
         int root_had_collision = 0;
-        for (int ai = 0; ai < n && !root_had_collision; ai++) {
-            int a = members[root][ai];
-            if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_in_merge(a)) continue;
-            for (int bi = ai + 1; bi < n; bi++) {
-                int b = members[root][bi];
-                int lo = a < b ? a : b;
-                int hi = a < b ? b : a;
-                double speed = 0.0;
+        for (int rj = 0; rj < active_root_count && !root_had_collision; rj++) {
+            int other_root = active_roots[rj];
+            int same_root = (other_root == root);
+            int na, nb;
 
-                if (!g_bodies[b].alive || g_bodies[b].is_star || resolved[b] || body_is_in_merge(b)) continue;
-                if (!systems_may_interact(root_of[a], root_of[b], system_radius)) continue;
+            if (other_root < 0 || other_root >= g_nbodies) continue;
+            if (!g_bodies[other_root].alive) continue;
+            if (other_root < root) continue;
+            if (!systems_may_interact(root, other_root, system_radius)) continue;
 
-                if (s_system_hot[root] > 0.0) {
-                    s_pair_next[lo][hi] = HOT_PAIR_DT;
-                } else {
-                    s_pair_next[lo][hi] -= dt;
-                    if (s_pair_next[lo][hi] > 0.0) continue;
-                }
+            na = member_count[root];
+            nb = member_count[other_root];
+            for (int ai = 0; ai < na && !root_had_collision; ai++) {
+                int a = members[root][ai];
+                if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_in_merge(a)) continue;
+                for (int bi = 0; bi < nb; bi++) {
+                    int b = members[other_root][bi];
+                    int lo, hi;
+                    double speed = 0.0;
 
-                if (!swept_spheres_collide(a, b, dt, &speed)) {
-                    s_pair_next[lo][hi] = pair_check_dt(a, b);
-                    continue;
-                }
+                    if (same_root && bi <= ai) continue;
+                    if (a == b) continue;
+                    if (!g_bodies[b].alive || g_bodies[b].is_star || resolved[b] || body_is_in_merge(b)) continue;
 
-                {
-                    int target = g_bodies[a].mass >= g_bodies[b].mass ? a : b;
-                    int impactor = target == a ? b : a;
-                    absorb_body(target, impactor, speed, dt);
-                    resolved[target] = 1;
-                    resolved[impactor] = 1;
-                    s_pair_next[lo][hi] = HOT_PAIR_DT;
-                    root_had_collision = 1;
-                    break;
+                    lo = a < b ? a : b;
+                    hi = a < b ? b : a;
+
+                    if (s_system_hot[root] > 0.0) {
+                        s_pair_next[lo][hi] = HOT_PAIR_DT;
+                    } else {
+                        s_pair_next[lo][hi] -= dt;
+                        if (s_pair_next[lo][hi] > 0.0) continue;
+                    }
+
+                    if (!swept_spheres_collide(a, b, dt, &speed)) {
+                        s_pair_next[lo][hi] = pair_check_dt(a, b);
+                        continue;
+                    }
+
+                    {
+                        int target = g_bodies[a].mass >= g_bodies[b].mass ? a : b;
+                        int impactor = target == a ? b : a;
+                        absorb_body(target, impactor, speed, dt);
+                        resolved[target] = 1;
+                        resolved[impactor] = 1;
+                        s_pair_next[lo][hi] = HOT_PAIR_DT;
+                        root_had_collision = 1;
+                        break;
+                    }
                 }
             }
         }
