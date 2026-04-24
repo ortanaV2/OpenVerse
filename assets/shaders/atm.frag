@@ -86,10 +86,18 @@ void main() {
     float alpha = glow * u_atm_intensity * lit;
     if (alpha < 0.003) discard;
 
-    /* Logarithmic depth — view-direction depth, consistent with phong.frag
-     * and solid.frag / color.frag (all use eye_depth = 1/gl_FragCoord.w). */
+    /* Logarithmic depth — use the BACK face of the atmosphere sphere.
+     *
+     * Using the front face (t_atm) causes the glow of body A to render
+     * additively over body B whenever A's atmosphere front face sits in
+     * front of B's solid surface — which happens during merges because the
+     * target's atmosphere shell extends past the impactor's sphere.  The
+     * back face (t_atm_back) is always behind any solid object that sits
+     * inside the atmosphere shell, so the depth test correctly rejects the
+     * glow at pixels occupied by a closer solid body.                    */
     const float FAR = 2000.0;
-    float eye_depth  = t_atm * dot(ray_dir, u_cam_fwd);
+    float t_atm_back = -b + sqrt(max(0.0, R_atm * R_atm - p2));
+    float eye_depth  = t_atm_back * dot(ray_dir, u_cam_fwd);
     gl_FragDepth = log2(eye_depth + 1.0) / log2(FAR + 1.0);
 
     frag_color = vec4(u_atm_color * alpha, alpha);

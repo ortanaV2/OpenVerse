@@ -884,7 +884,7 @@ void render_frame(const float view[16], const float proj[16],
         glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
 
         /* Procedural surface texture — name-based lookup, index-independent */
-        glUniform1f(s_sp_rotation,  (float)b->rotation_angle);
+        glUniform1f(s_sp_rotation,  (float)fmod(b->rotation_angle, 2.0 * PI));
         glUniform1f(s_sp_obliquity, (float)(b->obliquity * (PI / 180.0)));
         glUniform1i(s_sp_ptype,     get_planet_type(b->name));
         {

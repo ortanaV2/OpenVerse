@@ -271,6 +271,13 @@ void main() {
 
     vec3 surface = surface_color(NL);
     vec3 lava_emit = vec3(0.0);
+
+    /* Sun direction — computed once, reused for emission clamping inside the
+     * impact loop (kind 4 dampens edge/fringe emission on the lit hemisphere
+     * to avoid a transparent-looking orange halo when viewed from the sun). */
+    vec3  L    = normalize(u_sun_rel - hit_rel);
+    float diff = max(dot(N, L), 0.0);
+
     for (int i = 0; i < 16; i++) {
         if (i >= u_impact_count) break;
         vec3 idir = normalize(u_impact_dir[i]);
@@ -316,23 +323,26 @@ void main() {
             /* Live sphere-sphere intersection boundary.
              * rad = angular radius of the buried cap on this sphere.
              * Render the cap as molten lava with a bright ring at the edge. */
-            float inside_cap  = 1.0 - smoothstep(rad * 0.80, rad * 1.05, ang);
-            float edge_ring   = smoothstep(rad * 0.68, rad * 0.92, ang)
-                              * (1.0 - smoothstep(rad * 0.92, rad * 1.20, ang));
+            float inside_cap  = 1.0 - smoothstep(rad * 0.80, rad * 1.10, ang);
+            float edge_ring   = smoothstep(rad * 0.55, rad * 0.85, ang)
+                              * (1.0 - smoothstep(rad * 0.85, rad * 1.55, ang));
             float outer_fringe = smoothstep(rad * 0.98, rad * 1.30, ang)
                                * (1.0 - smoothstep(rad * 1.30, rad * 1.95, ang));
 
             surface = mix(surface, mix(lava_deep, lava_molten, inside_cap * 0.7),
                           inside_cap * heat * 0.88);
             lava_emit += mix(lava_warm, lava_molten, inside_cap) * inside_cap * heat * 1.65;
-            lava_emit += lava_molten * edge_ring * heat * 1.8;
-            lava_emit += lava_warm * outer_fringe * heat * 0.9;
+            /* Dampen edge/fringe glow on the lit side: viewing from the sun
+             * direction the ring at ang≈90° (the equatorial limb) would
+             * otherwise appear as a bright orange halo that looks transparent.
+             * Keep full intensity on the night side (diff≈0).              */
+            float night_blend = 1.0 - diff * 0.80;
+            lava_emit += lava_molten * edge_ring * heat * 1.8 * night_blend;
+            lava_emit += lava_warm * outer_fringe * heat * 0.9 * night_blend;
         }
     }
 
     /* ---- Phong diffuse ------------------------------------------------ */
-    vec3  L     = normalize(u_sun_rel - hit_rel);
-    float diff  = max(dot(N, L), 0.0);
     float light = u_ambient + (1.0 - u_ambient) * diff;
 
     frag_color = vec4(surface * light + lava_emit, 1.0);
