@@ -21,6 +21,12 @@ typedef struct {
     int   kind;            /* CollisionVisualKind */
 } CollisionSpot;
 
+typedef struct {
+    float pos[3];          /* camera-relative render-space position */
+    float color[4];        /* rgba */
+    float size;            /* per-particle size multiplier */
+} CollisionParticle;
+
 void collision_step(double dt);
 int  collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPOTS]);
 void collision_on_body_added(int body_idx);
@@ -28,3 +34,5 @@ double collision_visual_radius(int body_idx, double physical_radius);
 void collision_body_heat_glow(int body_idx, float out_color[3],
                               float *out_intensity, float *out_scale);
 int collision_body_has_active_merge(int body_idx);
+int collision_particles(CollisionParticle *out, int max_particles,
+                        const double cam_pos[3]);

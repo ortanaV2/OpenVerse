@@ -97,6 +97,12 @@ static GLuint s_dot_shader  = 0;
 static GLuint s_dot_vao     = 0;
 static GLuint s_dot_vbo     = 0;
 static GLint  s_dot_vp      = -1;
+static GLuint s_impact_particle_shader = 0;
+static GLint  s_impact_particle_vp = -1;
+static GLuint s_impact_particle_vao = 0;
+static GLuint s_impact_particle_vbo = 0;
+
+#define RENDER_MAX_COLLISION_PARTICLES 768
 
 /* ------------------------------------------------------------------ star glare */
 static GLuint s_glare_shader = 0;
@@ -470,6 +476,14 @@ void render_init(void) {
     }
     s_dot_vp = glGetUniformLocation(s_dot_shader, "u_vp");
 
+    s_impact_particle_shader = gl_shader_load("assets/shaders/impact_particle.vert",
+                                              "assets/shaders/impact_particle.frag");
+    if (!s_impact_particle_shader) {
+        fprintf(stderr, "[Render] impact particle shader failed\n");
+        return;
+    }
+    s_impact_particle_vp = glGetUniformLocation(s_impact_particle_shader, "u_vp");
+
     /* Dynamic VBO for dot positions + colors */
     s_dot_vao = gl_vao_create();
     s_dot_vbo = gl_vbo_create(MAX_BODIES * 7 * sizeof(float),
@@ -479,6 +493,19 @@ void render_init(void) {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 7*sizeof(float),
                           (void*)(3*sizeof(float)));
+    glBindVertexArray(0);
+
+    s_impact_particle_vao = gl_vao_create();
+    s_impact_particle_vbo = gl_vbo_create(RENDER_MAX_COLLISION_PARTICLES * 8 * sizeof(float),
+                                          NULL, GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 8*sizeof(float), (void*)0);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 8*sizeof(float),
+                          (void*)(3*sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 8*sizeof(float),
+                          (void*)(7*sizeof(float)));
     glBindVertexArray(0);
 
     /* --- Build-mode preview lines --- */
@@ -994,6 +1021,44 @@ void render_frame(const float view[16], const float proj[16],
         glDisable(GL_BLEND);
     }
 
+    /* ------------------------------------------------------------------ 3. Collision particles */
+    {
+        CollisionParticle particles[RENDER_MAX_COLLISION_PARTICLES];
+        float particle_data[RENDER_MAX_COLLISION_PARTICLES * 8];
+        int particle_count = collision_particles(particles, RENDER_MAX_COLLISION_PARTICLES,
+                                                 g_cam.pos);
+
+        for (int i = 0; i < particle_count; i++) {
+            particle_data[i*8+0] = particles[i].pos[0];
+            particle_data[i*8+1] = particles[i].pos[1];
+            particle_data[i*8+2] = particles[i].pos[2];
+            particle_data[i*8+3] = particles[i].color[0];
+            particle_data[i*8+4] = particles[i].color[1];
+            particle_data[i*8+5] = particles[i].color[2];
+            particle_data[i*8+6] = particles[i].color[3];
+            particle_data[i*8+7] = particles[i].size;
+        }
+
+        if (particle_count > 0) {
+            glUseProgram(s_impact_particle_shader);
+            glUniformMatrix4fv(s_impact_particle_vp, 1, GL_FALSE, vp_camrel);
+            glBindVertexArray(s_impact_particle_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_impact_particle_vbo);
+            glBufferSubData(GL_ARRAY_BUFFER, 0,
+                            particle_count * 8 * sizeof(float), particle_data);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+            glDepthMask(GL_FALSE);
+            glEnable(GL_DEPTH_TEST);
+            glEnable(GL_PROGRAM_POINT_SIZE);
+            glDrawArrays(GL_POINTS, 0, particle_count);
+            glDisable(GL_PROGRAM_POINT_SIZE);
+            glDepthMask(GL_TRUE);
+            glDisable(GL_BLEND);
+            glBindVertexArray(0);
+        }
+    }
+
     /* ------------------------------------------------------------------ 3. Center dots
      * Priority: Sun(0) > planets > moons. Within each tier: closer first.
      * Overlap check in screen space: two dots clash if their centres are
@@ -1284,6 +1349,7 @@ void render_shutdown(void) {
     glDeleteProgram(s_sphere_shader);
     glDeleteProgram(s_atm_shader);
     glDeleteProgram(s_dot_shader);
+    glDeleteProgram(s_impact_particle_shader);
     glDeleteProgram(s_glare_shader);
     glDeleteProgram(s_build_line_shader);
     glDeleteProgram(s_build_ui_shader);
@@ -1292,11 +1358,14 @@ void render_shutdown(void) {
     glDeleteVertexArrays(1, &s_sphere_vao);
     glDeleteBuffers(1, &s_dot_vbo);
     glDeleteVertexArrays(1, &s_dot_vao);
+    glDeleteBuffers(1, &s_impact_particle_vbo);
+    glDeleteVertexArrays(1, &s_impact_particle_vao);
     glDeleteBuffers(1, &s_build_line_vbo);
     glDeleteVertexArrays(1, &s_build_line_vao);
     glDeleteBuffers(1, &s_build_ui_vbo);
     glDeleteVertexArrays(1, &s_build_ui_vao);
     s_sphere_shader = s_dot_shader = 0;
+    s_impact_particle_shader = 0;
     s_build_line_shader = s_build_ui_shader = 0;
     s_build_font = NULL;
 }

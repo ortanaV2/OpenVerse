@@ -25,6 +25,7 @@
 #define MERGE_COOL_SECONDS (DAY * 180.0)
 #define MERGE_PHASE_SECONDS (DAY * 8.0)
 #define MAX_MERGES 16
+#define MAX_COLLISION_PARTICLES 768
 
 typedef struct {
     int active;
@@ -54,19 +55,34 @@ typedef struct {
     double duration;
     double rel_speed;
     double dir[3];
+    double rel_vel[3];
     double start_sep;
+    double particle_emit_accum;
+    double particle_emit_next;
     double target_rotation_rate;   /* saved initial rates so both can slow together */
     double impactor_rotation_rate;
     int scar_slot;          /* s_impacts index for the target intersection scar */
     int imp_scar_slot;      /* s_impacts index for the impactor intersection scar */
 } MergeEvent;
 
+typedef struct {
+    int active;
+    double age;
+    double duration;
+    double pos[3];
+    double vel[3];
+    float color[4];
+    float size;
+} ImpactParticleState;
+
 static ImpactEvent s_impacts[MAX_IMPACTS];
 static RadiusTransition s_radius_fx[MAX_BODIES];
 static MergeEvent s_merges[MAX_MERGES];
+static ImpactParticleState s_particles[MAX_COLLISION_PARTICLES];
 static double s_pair_next[MAX_BODIES][MAX_BODIES];
 static unsigned char s_system_dirty[MAX_BODIES];
 static double s_system_hot[MAX_BODIES];
+static unsigned int s_particle_rng = 0x1234abcdu;
 
 static void mark_system_dirty(int root, double hot_duration)
 {
@@ -131,6 +147,54 @@ static void normalize3f(float v[3])
     v[0] /= len; v[1] /= len; v[2] /= len;
 }
 
+static double rand01(void)
+{
+    s_particle_rng = 1664525u * s_particle_rng + 1013904223u;
+    return (double)(s_particle_rng & 0x00ffffffu) / (double)0x01000000u;
+}
+
+static void orthonormal_basis(const double n[3], double t1[3], double t2[3])
+{
+    double ref[3] = {0.0, 1.0, 0.0};
+    double len;
+
+    if (fabs(n[1]) > 0.9) {
+        ref[0] = 1.0;
+        ref[1] = 0.0;
+        ref[2] = 0.0;
+    }
+
+    t1[0] = n[1]*ref[2] - n[2]*ref[1];
+    t1[1] = n[2]*ref[0] - n[0]*ref[2];
+    t1[2] = n[0]*ref[1] - n[1]*ref[0];
+    len = sqrt(dot3d(t1, t1));
+    if (len <= 1e-12) {
+        t1[0] = 1.0; t1[1] = 0.0; t1[2] = 0.0;
+    } else {
+        t1[0] /= len; t1[1] /= len; t1[2] /= len;
+    }
+
+    t2[0] = n[1]*t1[2] - n[2]*t1[1];
+    t2[1] = n[2]*t1[0] - n[0]*t1[2];
+    t2[2] = n[0]*t1[1] - n[1]*t1[0];
+    len = sqrt(dot3d(t2, t2));
+    if (len <= 1e-12) {
+        t2[0] = 0.0; t2[1] = 0.0; t2[2] = 1.0;
+    } else {
+        t2[0] /= len; t2[1] /= len; t2[2] /= len;
+    }
+}
+
+static void normalize3d(double v[3])
+{
+    double len = sqrt(dot3d(v, v));
+    if (len <= 1e-12) {
+        v[0] = 1.0; v[1] = 0.0; v[2] = 0.0;
+        return;
+    }
+    v[0] /= len; v[1] /= len; v[2] /= len;
+}
+
 static double ease_out_cubic(double t)
 {
     double inv;
@@ -176,7 +240,7 @@ static double impact_spread_curve(const ImpactEvent *e, double t)
     if (e->kind == COLLISION_VIS_MERGE)
         return fast_then_slow_spread(t, 0.09);
     if (e->kind == COLLISION_VIS_INTERSECT)
-        return fast_then_slow_spread(t, 0.16);
+        return fast_then_slow_spread(t, 0.42);
     if (e->kind == COLLISION_VIS_MAJOR)
         return fast_then_slow_spread(t, 0.14);
     return fast_then_slow_spread(t, 0.18);
@@ -194,7 +258,7 @@ static double active_merge_glow_progress(int body_idx)
         t = m->age / m->duration;
         if (t < 0.0) t = 0.0;
         if (t > 1.0) t = 1.0;
-        grow_t = 0.20 + 0.80 * ease_out_cubic(t);
+        grow_t = 0.78 + 0.22 * ease_out_cubic(t);
         if (grow_t > best) best = grow_t;
     }
     return best;
@@ -213,6 +277,256 @@ static double current_visual_radius(int body_idx, double physical_radius)
     if (t >= 1.0) return fx->target_radius;
     return fx->start_radius +
            (fx->target_radius - fx->start_radius) * ease_out_cubic(t);
+}
+
+static double current_contact_radius(int body_idx)
+{
+    if (body_idx < 0 || body_idx >= g_nbodies) return 0.0;
+    return current_visual_radius(body_idx, g_bodies[body_idx].radius);
+}
+
+static int current_merge_intersection_ring(int body_idx, const double fallback_dir[3],
+                                           double out_center[3], double out_normal[3],
+                                           double *out_ring_radius)
+{
+    double best_align = -2.0;
+    double fallback_n[3] = {1.0, 0.0, 0.0};
+    double fallback_len = sqrt(dot3d(fallback_dir, fallback_dir));
+
+    if (body_idx < 0 || body_idx >= g_nbodies) return 0;
+    if (fallback_len > 1e-12) {
+        fallback_n[0] = fallback_dir[0] / fallback_len;
+        fallback_n[1] = fallback_dir[1] / fallback_len;
+        fallback_n[2] = fallback_dir[2] / fallback_len;
+    }
+
+    for (int i = 0; i < MAX_MERGES; i++) {
+        MergeEvent *m = &s_merges[i];
+        int other_idx;
+        double c0[3], c1[3], n[3], d, r0, r1, x, rr2, align;
+
+        if (!m->active) continue;
+        if (m->target != body_idx && m->impactor != body_idx) continue;
+
+        other_idx = (m->target == body_idx) ? m->impactor : m->target;
+        if (other_idx < 0 || other_idx >= g_nbodies) continue;
+        if (!g_bodies[body_idx].alive || !g_bodies[other_idx].alive) continue;
+
+        c0[0] = g_bodies[body_idx].pos[0];
+        c0[1] = g_bodies[body_idx].pos[1];
+        c0[2] = g_bodies[body_idx].pos[2];
+        c1[0] = g_bodies[other_idx].pos[0];
+        c1[1] = g_bodies[other_idx].pos[1];
+        c1[2] = g_bodies[other_idx].pos[2];
+        n[0] = c1[0] - c0[0];
+        n[1] = c1[1] - c0[1];
+        n[2] = c1[2] - c0[2];
+        d = sqrt(dot3d(n, n));
+        if (d <= 1e-9) continue;
+
+        n[0] /= d; n[1] /= d; n[2] /= d;
+        align = dot3d(n, fallback_n);
+        if (align < best_align) continue;
+
+        r0 = current_contact_radius(body_idx);
+        r1 = current_contact_radius(other_idx);
+        if (d >= r0 + r1) continue;
+
+        x = (r0*r0 - r1*r1 + d*d) / (2.0 * d);
+        if (x < 0.0) x = 0.0;
+        if (x > r0) x = r0;
+        rr2 = r0*r0 - x*x;
+        if (rr2 <= 1e-6) continue;
+
+        out_center[0] = c0[0] + n[0] * x;
+        out_center[1] = c0[1] + n[1] * x;
+        out_center[2] = c0[2] + n[2] * x;
+        out_normal[0] = n[0];
+        out_normal[1] = n[1];
+        out_normal[2] = n[2];
+        *out_ring_radius = sqrt(rr2);
+        best_align = align;
+    }
+
+    return best_align > -1.5;
+}
+
+static void spawn_impact_particles(int body_idx, int kind, const double world_dir[3],
+                                   const double rel_vel[3], double impactor_radius,
+                                   double rel_speed, double pack_scale)
+{
+    double n[3] = {world_dir[0], world_dir[1], world_dir[2]};
+    double len = sqrt(dot3d(n, n));
+    double t1[3], t2[3];
+    double body_r, size_ratio, size_mix;
+    double anchor_center[3] = {0.0, 0.0, 0.0};
+    double anchor_normal[3] = {1.0, 0.0, 0.0};
+    double base_ring_radius = 0.0;
+    int use_live_ring = 0;
+    int count;
+    float base_r, base_g, base_b;
+
+    if (body_idx < 0 || body_idx >= g_nbodies) return;
+    if (!g_bodies[body_idx].alive || len <= 1e-12) return;
+
+    n[0] /= len; n[1] /= len; n[2] /= len;
+    body_r = current_contact_radius(body_idx);
+    size_ratio = impactor_radius / fmax(body_r, 1.0);
+    if (size_ratio < 0.015) size_ratio = 0.015;
+    if (size_ratio > 1.0) size_ratio = 1.0;
+    size_mix = pow(size_ratio, 0.68);
+    use_live_ring = current_merge_intersection_ring(body_idx, n, anchor_center,
+                                                    anchor_normal, &base_ring_radius);
+    if (!use_live_ring) {
+        anchor_normal[0] = n[0];
+        anchor_normal[1] = n[1];
+        anchor_normal[2] = n[2];
+        anchor_center[0] = g_bodies[body_idx].pos[0] + n[0] * body_r;
+        anchor_center[1] = g_bodies[body_idx].pos[1] + n[1] * body_r;
+        anchor_center[2] = g_bodies[body_idx].pos[2] + n[2] * body_r;
+        base_ring_radius = impactor_radius * (0.46 + 0.22 * size_mix);
+    } else {
+        base_ring_radius = fmin(base_ring_radius,
+                                impactor_radius * (0.58 + 0.24 * size_mix));
+    }
+    orthonormal_basis(anchor_normal, t1, t2);
+
+    if (kind == COLLISION_VIS_MERGE) count = 42;
+    else if (kind == COLLISION_VIS_MAJOR) count = 26;
+    else count = 14;
+    count = (int)(count * (0.18 + 0.95 * size_mix));
+    count = (int)(count * pack_scale);
+    if (count < 4) count = 4;
+    if (rel_speed > 16000.0) count += 10;
+    if (rel_speed > 28000.0) count += 10;
+    if (count > 72) count = 72;
+
+    if (kind == COLLISION_VIS_MAJOR || kind == COLLISION_VIS_MERGE) {
+        base_r = 1.00f; base_g = 0.66f; base_b = 0.24f;
+    } else {
+        base_r = 0.92f; base_g = 0.56f; base_b = 0.20f;
+    }
+
+    for (int i = 0; i < count; i++) {
+        int slot = -1;
+        double phi, ring_radius, tangent_mix, eject_speed, spread_speed;
+        double outward_bias;
+        double speed_scale;
+        double ring_dir[3], ring_t1[3], ring_t2[3];
+        double rel_vhat[3], tangent_dir[3], tangent_len, normal_approach;
+        double out_plane_angle, in_plane_angle;
+        double heat_mix;
+        ImpactParticleState *p;
+
+        for (int k = 0; k < MAX_COLLISION_PARTICLES; k++) {
+            if (!s_particles[k].active) { slot = k; break; }
+        }
+        if (slot < 0) {
+            slot = 0;
+            for (int k = 1; k < MAX_COLLISION_PARTICLES; k++)
+                if (s_particles[k].age > s_particles[slot].age) slot = k;
+        }
+
+        phi = rand01() * 2.0 * PI;
+        if (use_live_ring)
+            ring_radius = (0.98 + 0.06 * rand01()) * fmax(base_ring_radius,
+                                                          impactor_radius * (0.14 + 0.05 * size_mix));
+        else
+            ring_radius = (0.92 + 0.16 * rand01()) * base_ring_radius;
+        tangent_mix = 0.55 + 0.75 * rand01();
+        speed_scale = rel_speed / 42000.0;
+        if (speed_scale < 0.0) speed_scale = 0.0;
+        if (speed_scale > 1.2) speed_scale = 1.2;
+        eject_speed = 180.0
+                    + rel_speed * (0.045 + 0.070 * rand01())
+                    + rel_speed * speed_scale * (0.010 + 0.016 * rand01());
+        rel_vhat[0] = rel_vel ? rel_vel[0] : -anchor_normal[0];
+        rel_vhat[1] = rel_vel ? rel_vel[1] : -anchor_normal[1];
+        rel_vhat[2] = rel_vel ? rel_vel[2] : -anchor_normal[2];
+        normalize3d(rel_vhat);
+        normal_approach = -(rel_vhat[0]*anchor_normal[0] +
+                            rel_vhat[1]*anchor_normal[1] +
+                            rel_vhat[2]*anchor_normal[2]);
+        if (normal_approach < 0.0) normal_approach = 0.0;
+        if (normal_approach > 1.0) normal_approach = 1.0;
+        tangent_dir[0] = rel_vhat[0] + anchor_normal[0] * normal_approach;
+        tangent_dir[1] = rel_vhat[1] + anchor_normal[1] * normal_approach;
+        tangent_dir[2] = rel_vhat[2] + anchor_normal[2] * normal_approach;
+        tangent_len = sqrt(dot3d(tangent_dir, tangent_dir));
+        if (tangent_len > 1e-8) {
+            tangent_dir[0] /= tangent_len;
+            tangent_dir[1] /= tangent_len;
+            tangent_dir[2] /= tangent_len;
+        } else {
+            tangent_dir[0] = t1[0];
+            tangent_dir[1] = t1[1];
+            tangent_dir[2] = t1[2];
+        }
+        ring_dir[0] = t1[0] * cos(phi) + t2[0] * sin(phi);
+        ring_dir[1] = t1[1] * cos(phi) + t2[1] * sin(phi);
+        ring_dir[2] = t1[2] * cos(phi) + t2[2] * sin(phi);
+        normalize3d(ring_dir);
+        ring_t1[0] = tangent_dir[0];
+        ring_t1[1] = tangent_dir[1];
+        ring_t1[2] = tangent_dir[2];
+        ring_t2[0] = anchor_normal[0];
+        ring_t2[1] = anchor_normal[1];
+        ring_t2[2] = anchor_normal[2];
+        in_plane_angle = ((rand01() * 2.0) - 1.0) * (PI / 12.0);
+        out_plane_angle = ((rand01() * 2.0) - 1.0) * ((PI / 18.0) + (PI / 14.0) * normal_approach);
+        spread_speed = eject_speed * (0.20 + 0.24 * tangent_mix + 0.08 * (1.0 - normal_approach));
+        outward_bias = use_live_ring
+                     ? impactor_radius * (0.07 + 0.03 * size_mix)
+                     : impactor_radius * (0.14 + 0.05 * size_mix);
+
+        p = &s_particles[slot];
+        p->active = 1;
+        p->duration = (kind == COLLISION_VIS_MERGE ? 1.2 : kind == COLLISION_VIS_MAJOR ? 0.9 : 0.55) * DAY
+                    * (0.65 + 0.55 * rand01());
+        p->age = 0.0;
+        p->pos[0] = anchor_center[0]
+                  + anchor_normal[0] * outward_bias
+                  + t1[0] * cos(phi) * ring_radius
+                  + t2[0] * sin(phi) * ring_radius;
+        p->pos[1] = anchor_center[1]
+                  + anchor_normal[1] * outward_bias
+                  + t1[1] * cos(phi) * ring_radius
+                  + t2[1] * sin(phi) * ring_radius;
+        p->pos[2] = anchor_center[2]
+                  + anchor_normal[2] * outward_bias
+                  + t1[2] * cos(phi) * ring_radius
+                  + t2[2] * sin(phi) * ring_radius;
+        p->vel[0] = g_bodies[body_idx].vel[0]
+                  + ring_dir[0] * eject_speed
+                  + ring_t1[0] * (spread_speed * sin(in_plane_angle))
+                  + ring_t2[0] * (spread_speed * sin(out_plane_angle));
+        p->vel[1] = g_bodies[body_idx].vel[1]
+                  + ring_dir[1] * eject_speed
+                  + ring_t1[1] * (spread_speed * sin(in_plane_angle))
+                  + ring_t2[1] * (spread_speed * sin(out_plane_angle));
+        p->vel[2] = g_bodies[body_idx].vel[2]
+                  + ring_dir[2] * eject_speed
+                  + ring_t1[2] * (spread_speed * sin(in_plane_angle))
+                  + ring_t2[2] * (spread_speed * sin(out_plane_angle));
+        heat_mix = 0.24 + 0.58 * rand01() + 0.18 * fmin(speed_scale, 1.0);
+        (void)heat_mix;
+        p->color[0] = base_r;
+        p->color[1] = base_g * (0.90f + 0.20f * (float)rand01());
+        p->color[2] = base_b * (0.85f + 0.25f * (float)rand01());
+        p->color[3] = 1.0f;
+        p->size = 0.5f + 2.5f * (float)rand01();
+    }
+}
+
+static void finish_radius_transition(int body_idx)
+{
+    RadiusTransition *fx;
+
+    if (body_idx < 0 || body_idx >= MAX_BODIES) return;
+    fx = &s_radius_fx[body_idx];
+    if (!fx->active) return;
+    fx->age = fx->duration;
+    fx->active = 0;
 }
 
 static void start_radius_transition(int body_idx, double old_radius,
@@ -238,8 +552,8 @@ static void start_radius_transition(int body_idx, double old_radius,
 }
 
 static void add_impact(int body_idx, int kind, const double world_dir[3],
-                       double impactor_radius, double rel_speed,
-                       double mass_ratio)
+                       const double rel_vel[3], double impactor_radius,
+                       double rel_speed, double mass_ratio)
 {
     int slot = -1;
     Body *b;
@@ -281,6 +595,8 @@ static void add_impact(int body_idx, int kind, const double world_dir[3],
     }
     body_world_to_local_surface_dir(body_idx, world_dir, e->dir);
     normalize3f(e->dir);
+    spawn_impact_particles(body_idx, kind, world_dir, rel_vel,
+                           impactor_radius, rel_speed, 1.0);
 }
 
 static double trail_interval_for_body_after_merge(int body_idx)
@@ -311,6 +627,7 @@ static double merge_duration_for_bodies(int target, int impactor, double rel_spe
 {
     double radius_scale;
     double speed_scale;
+    double speed_factor;
     double duration;
 
     radius_scale = (g_bodies[target].radius + g_bodies[impactor].radius)
@@ -318,12 +635,23 @@ static double merge_duration_for_bodies(int target, int impactor, double rel_spe
     if (radius_scale < 0.35) radius_scale = 0.35;
 
     speed_scale = 1.0 / (1.0 + rel_speed / 18000.0);
-    if (speed_scale < 0.45) speed_scale = 0.45;
+    if (speed_scale < 0.40) speed_scale = 0.40;
+    /* Faster impacts should finish their penetration phase sooner, but not
+     * so fast that the merge loses readability. */
+    speed_factor = 0.55 + 0.45 * speed_scale;
 
-    duration = DAY * 1.18 * pow(radius_scale, 0.55) / speed_scale;
+    duration = DAY * 1.28 * pow(radius_scale, 0.55) * speed_factor;
     if (duration < DAY * 1.2) duration = DAY * 1.2;
     if (duration > DAY * 14.0) duration = DAY * 14.0;
     return duration;
+}
+
+static double merge_speed_boost(double rel_speed)
+{
+    double t = rel_speed / 12000.0;
+    if (t < 0.0) t = 0.0;
+    if (t > 2.2) t = 2.2;
+    return t;
 }
 
 static void finalize_absorb_body(int target, int impactor, double rel_speed,
@@ -364,6 +692,7 @@ static void update_merge_events(double dt)
         MergeEvent *m = &s_merges[i];
         Body *target, *impactor;
         double t, overlap_sep;
+        double speed_boost;
 
         if (!m->active) continue;
         if (m->target < 0 || m->target >= g_nbodies ||
@@ -382,28 +711,71 @@ static void update_merge_events(double dt)
         m->age += dt;
         t = m->age / m->duration;
         if (t > 1.0) t = 1.0;
+        speed_boost = merge_speed_boost(m->rel_speed);
+        m->particle_emit_accum += dt;
 
         /* Lock impactor velocity to target. */
         impactor->vel[0] = target->vel[0];
         impactor->vel[1] = target->vel[1];
         impactor->vel[2] = target->vel[2];
 
-        /* Both rotations snap to nearly zero in the first 15% of the merge —
+        /* Both rotations snap to nearly zero very early in the merge —
          * the deceleration should feel simultaneous with the impact. */
         {
-            double slow = 1.0 - ease_out_cubic(fmin(1.0, t / 0.15));
+            double spin_window = 0.07 - 0.02 * fmin(speed_boost, 1.0);
+            double slow = 1.0 - ease_out_cubic(fmin(1.0, t / spin_window));
             target->rotation_rate   = m->target_rotation_rate   * slow;
             impactor->rotation_rate = m->impactor_rotation_rate * slow;
         }
 
         {
-            double merge_t = 0.78 * ease_out_cubic(fmin(1.0, t / 0.30))
-                           + 0.22 * ease_out_cubic(t);
-            overlap_sep = m->start_sep + (target->radius * 0.08 - m->start_sep) * merge_t;
+            double target_contact_r = current_contact_radius(m->target);
+            double impactor_r = g_bodies[m->impactor].radius;
+            double depth_boost = fmin(speed_boost, 2.0);
+            double final_target_sep = target_contact_r
+                                    - impactor_r * (1.06 + 0.42 * depth_boost);
+            double pen_t;
+            if (final_target_sep < target_contact_r * 0.004)
+                final_target_sep = target_contact_r * 0.004;
+            {
+                double pen_exp = 3.0 + 2.8 * depth_boost;
+                double fast_t = 1.0 - pow(1.0 - t, pen_exp);
+                double tail_blend = (t - 0.22) / 0.78;
+                if (tail_blend < 0.0) tail_blend = 0.0;
+                if (tail_blend > 1.0) tail_blend = 1.0;
+                tail_blend = tail_blend * tail_blend * (3.0 - 2.0 * tail_blend);
+                pen_t = fast_t * (1.0 - 0.12 * tail_blend) + t * (0.12 * tail_blend);
+            }
+            overlap_sep = m->start_sep + (final_target_sep - m->start_sep) * pen_t;
         }
         impactor->pos[0] = target->pos[0] + m->dir[0] * overlap_sep;
         impactor->pos[1] = target->pos[1] + m->dir[1] * overlap_sep;
         impactor->pos[2] = target->pos[2] + m->dir[2] * overlap_sep;
+
+        if (t < 0.04) {
+            double emit_t = t / 0.04;
+            double emit_decay = 1.0 - emit_t;
+            if (emit_t > 1.0) emit_t = 1.0;
+            double emit_slice = DAY * (0.003 + 0.010 * emit_t);
+            double emit_prob = 0.88 * emit_decay * emit_decay * emit_decay
+                             * emit_decay * emit_decay;
+            if (emit_slice < DAY * 0.0025) emit_slice = DAY * 0.0025;
+            while (m->particle_emit_accum >= emit_slice) {
+                m->particle_emit_accum -= emit_slice;
+                if (rand01() < emit_prob) {
+                    double pack_scale = (0.10 + 0.05 * fmin(speed_boost, 1.4))
+                                      * emit_decay * emit_decay * emit_decay
+                                      * emit_decay * emit_decay;
+                    if (pack_scale < 0.020) pack_scale = 0.020;
+                spawn_impact_particles(m->target, COLLISION_VIS_MERGE, m->dir,
+                                       m->rel_vel, g_bodies[m->impactor].radius,
+                                       m->rel_speed, pack_scale);
+                }
+            }
+        } else {
+            m->particle_emit_accum = 0.0;
+            m->particle_emit_next = 0.0;
+        }
 
         /* Keep the scar event frozen and growing while the merge is live. */
         if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
@@ -419,8 +791,10 @@ static void update_merge_events(double dt)
                 float cap = (float)acos(cos_a);
                 if (cap > scar->radius0) {
                     float local_dir[3];
+                    float boost = (float)(0.06 + 0.12 * fmin(speed_boost, 1.2));
                     scar->radius0 = cap;
-                    scar->radius1 = fminf((float)(PI * 0.88), fmaxf(scar->radius1, cap * 1.06f));
+                    scar->radius1 = fminf((float)(PI * 0.88),
+                                          fmaxf(scar->radius1, cap * (1.08f + boost)));
                     body_world_to_local_surface_dir(m->target, m->dir, local_dir);
                     normalize3f(local_dir);
                     scar->dir[0] = local_dir[0];
@@ -446,8 +820,10 @@ static void update_merge_events(double dt)
                 if (cap > scar->radius0) {
                     float local_dir[3];
                     double neg_dir[3] = {-m->dir[0], -m->dir[1], -m->dir[2]};
+                    float boost = (float)(0.05 + 0.10 * fmin(speed_boost, 1.2));
                     scar->radius0 = cap;
-                    scar->radius1 = fminf((float)(PI * 0.88), fmaxf(scar->radius1, cap * 1.06f));
+                    scar->radius1 = fminf((float)(PI * 0.88),
+                                          fmaxf(scar->radius1, cap * (1.06f + boost)));
                     body_world_to_local_surface_dir(m->impactor, neg_dir, local_dir);
                     normalize3f(local_dir);
                     scar->dir[0] = local_dir[0];
@@ -458,12 +834,12 @@ static void update_merge_events(double dt)
             scar->age = 0.0;
         }
 
-        /* Despawn when the impactor is fully inside the target, or time runs out. */
+        /* Keep the merge alive until the full animation duration finishes so
+         * radius growth completes during the merge instead of after it. */
         {
-            double imp_r     = g_bodies[m->impactor].radius; /* constant, no shrink */
-            double tgt_vis_r = collision_visual_radius(m->target, target->radius);
-            if (overlap_sep + imp_r <= tgt_vis_r || m->age >= m->duration) {
+            if (m->age >= m->duration) {
                 double old_radius = target->radius;
+                finish_radius_transition(m->target);
 
                 /* Release target scar: set radius1 so it expands outward while cooling. */
                 if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
@@ -484,7 +860,8 @@ static void update_merge_events(double dt)
 }
 
 static void begin_merge_event(int target, int impactor, double rel_speed,
-                              const double dir[3], double old_radius)
+                              const double dir[3], const double rel_vel[3],
+                              double old_radius)
 {
     int slot = -1;
     Body *a = &g_bodies[target];
@@ -521,7 +898,15 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     s_merges[slot].dir[0]    = dir[0];
     s_merges[slot].dir[1]    = dir[1];
     s_merges[slot].dir[2]    = dir[2];
-    s_merges[slot].target_rotation_rate   = a->rotation_rate;
+    s_merges[slot].rel_vel[0] = rel_vel[0];
+    s_merges[slot].rel_vel[1] = rel_vel[1];
+    s_merges[slot].rel_vel[2] = rel_vel[2];
+        s_merges[slot].rel_vel[0] = b->vel[0] - a->vel[0];
+        s_merges[slot].rel_vel[1] = b->vel[1] - a->vel[1];
+        s_merges[slot].rel_vel[2] = b->vel[2] - a->vel[2];
+        s_merges[slot].particle_emit_accum    = 0.0;
+        s_merges[slot].particle_emit_next     = 0.0;
+        s_merges[slot].target_rotation_rate   = a->rotation_rate;
     s_merges[slot].impactor_rotation_rate = b->rotation_rate;
     s_merges[slot].scar_slot     = -1;
     s_merges[slot].imp_scar_slot = -1;
@@ -540,7 +925,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         s_merges[slot].duration  = anim_dur;
         s_merges[slot].start_sep = sep_init;
 
-        start_radius_transition(target, old_radius, a->radius, anim_dur);
+        start_radius_transition(target, old_radius, a->radius, anim_dur * 0.78);
         /* Impactor keeps its size throughout — no shrink transition. */
     }
 
@@ -568,7 +953,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         scar->duration = MERGE_COOL_SECONDS;
         scar->heat0    = 1.0f;
         scar->radius0  = 0.0f;
-        scar->radius1  = 0.0f;
+        scar->radius1  = (float)(0.22 + 0.12 * fmin(merge_speed_boost(rel_speed), 1.5));
         scar->dir[0]   = local_dir[0];
         scar->dir[1]   = local_dir[1];
         scar->dir[2]   = local_dir[2];
@@ -599,19 +984,24 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         scar->duration = MERGE_COOL_SECONDS;
         scar->heat0    = 1.0f;
         scar->radius0  = 0.0f;
-        scar->radius1  = 0.0f;
+        scar->radius1  = (float)(0.18 + 0.10 * fmin(merge_speed_boost(rel_speed), 1.5));
         scar->dir[0]   = local_dir[0];
         scar->dir[1]   = local_dir[1];
         scar->dir[2]   = local_dir[2];
         s_merges[slot].imp_scar_slot = scar_slot;
     }
+
+    spawn_impact_particles(target, COLLISION_VIS_MERGE, dir, s_merges[slot].rel_vel,
+                           b->radius, rel_speed, 0.85);
 }
 
 static int classify_collision(int a, int b, double rel_speed)
 {
     double m_small = g_bodies[a].mass < g_bodies[b].mass ? g_bodies[a].mass : g_bodies[b].mass;
     double m_large = g_bodies[a].mass > g_bodies[b].mass ? g_bodies[a].mass : g_bodies[b].mass;
-    double r_sum = g_bodies[a].radius + g_bodies[b].radius;
+    double ra = current_contact_radius(a);
+    double rb = current_contact_radius(b);
+    double r_sum = ra + rb;
     double mass_ratio, v_escape;
 
     if (m_large <= 0.0) return COLLISION_VIS_CRATER;
@@ -619,8 +1009,8 @@ static int classify_collision(int a, int b, double rel_speed)
     v_escape = sqrt(fmax(0.0, 2.0 * G_CONST * (g_bodies[a].mass + g_bodies[b].mass) /
                          fmax(r_sum, 1.0)));
 
-    if (mass_ratio >= 0.45 || g_bodies[a].radius >= 0.74 * g_bodies[b].radius ||
-        g_bodies[b].radius >= 0.74 * g_bodies[a].radius)
+    if (mass_ratio >= 0.45 || ra >= 0.74 * rb ||
+        rb >= 0.74 * ra)
         return COLLISION_VIS_MERGE;
     if (mass_ratio >= 0.08 || rel_speed >= v_escape * 1.35)
         return COLLISION_VIS_MAJOR;
@@ -653,7 +1043,7 @@ static double pair_check_dt(int a, int b)
     double vy = g_bodies[b].vel[1] - g_bodies[a].vel[1];
     double vz = g_bodies[b].vel[2] - g_bodies[a].vel[2];
     double vr = -(rx*vx + ry*vy + rz*vz) / dist;
-    double gap = dist - (g_bodies[a].radius + g_bodies[b].radius);
+    double gap = dist - (current_contact_radius(a) + current_contact_radius(b));
 
     if (gap <= 0.0) return MIN_PAIR_DT;
     if (vr <= 1e-3) {
@@ -703,7 +1093,7 @@ static int swept_spheres_collide(int a, int b, double dt, double *out_speed)
         rel_p[1] + rel_v[1] * t,
         rel_p[2] + rel_v[2] * t
     };
-    double r = g_bodies[a].radius + g_bodies[b].radius;
+    double r = current_contact_radius(a) + current_contact_radius(b);
     if (out_speed) *out_speed = sqrt(vv);
     return dot3d(c, c) <= r*r;
 }
@@ -764,17 +1154,22 @@ static void absorb_body(int target, int impactor, double rel_speed, double colli
     Body *b = &g_bodies[impactor];
     double old_radius;
     double mass_ratio;
+    double rel_vel[3] = {
+        g_bodies[impactor].vel[0] - g_bodies[target].vel[0],
+        g_bodies[impactor].vel[1] - g_bodies[target].vel[1],
+        g_bodies[impactor].vel[2] - g_bodies[target].vel[2]
+    };
     double dir[3];
     int outcome;
 
     if (!a->alive || !b->alive || a->is_star || b->is_star) return;
 
-    old_radius = a->radius;
+    old_radius = current_contact_radius(target);
     mass_ratio = fmin(a->mass, b->mass) / fmax(fmax(a->mass, b->mass), 1.0);
     outcome = classify_collision(target, impactor, rel_speed);
     impact_dir_for_pair(target, impactor, collision_dt, dir);
     if (outcome == COLLISION_VIS_MERGE) {
-        begin_merge_event(target, impactor, rel_speed, dir, old_radius);
+        begin_merge_event(target, impactor, rel_speed, dir, rel_vel, old_radius);
         return;
     }
 
@@ -782,7 +1177,7 @@ static void absorb_body(int target, int impactor, double rel_speed, double colli
         double total = a->mass + b->mass;
     if (total <= 0.0) return;
 
-    add_impact(target, outcome, dir, b->radius, rel_speed, mass_ratio);
+    add_impact(target, outcome, dir, rel_vel, b->radius, rel_speed, mass_ratio);
 
     a->vel[0] = (a->vel[0] * a->mass + b->vel[0] * b->mass) / total;
     a->vel[1] = (a->vel[1] * a->mass + b->vel[1] * b->mass) / total;
@@ -805,6 +1200,26 @@ void collision_step(double dt)
     int any_dirty = 0;
 
     update_merge_events(dt);
+
+    for (int i = 0; i < MAX_COLLISION_PARTICLES; i++) {
+        ImpactParticleState *p = &s_particles[i];
+        double drag;
+        if (!p->active) continue;
+        p->age += dt;
+        if (p->age >= p->duration) {
+            p->active = 0;
+            continue;
+        }
+        p->pos[0] += p->vel[0] * dt;
+        p->pos[1] += p->vel[1] * dt;
+        p->pos[2] += p->vel[2] * dt;
+        /* Mild time-based drag so debris keeps travelling with the impact
+         * instead of appearing to freeze in world space. */
+        drag = exp(-dt / (DAY * 18.0));
+        p->vel[0] *= drag;
+        p->vel[1] *= drag;
+        p->vel[2] *= drag;
+    }
 
     for (int i = 0; i < MAX_IMPACTS; i++) {
         if (!s_impacts[i].active) continue;
@@ -852,7 +1267,7 @@ void collision_step(double dt)
         double dx = g_bodies[i].pos[0] - g_bodies[root].pos[0];
         double dy = g_bodies[i].pos[1] - g_bodies[root].pos[1];
         double dz = g_bodies[i].pos[2] - g_bodies[root].pos[2];
-        double d = sqrt(dx*dx + dy*dy + dz*dz) + g_bodies[i].radius;
+        double d = sqrt(dx*dx + dy*dy + dz*dz) + current_contact_radius(i);
         if (d > system_radius[root]) system_radius[root] = d;
     }
 
@@ -872,7 +1287,7 @@ void collision_step(double dt)
 
             if (other_root < 0 || other_root >= g_nbodies) continue;
             if (!g_bodies[other_root].alive) continue;
-            if (other_root < root) continue;
+            if (other_root < root && s_system_dirty[other_root]) continue;
             if (!systems_may_interact(root, other_root, system_radius)) continue;
 
             na = member_count[root];
@@ -1037,4 +1452,46 @@ int collision_body_has_active_merge(int body_idx)
 {
     if (body_idx < 0 || body_idx >= g_nbodies) return 0;
     return body_is_in_merge(body_idx);
+}
+
+int collision_particles(CollisionParticle *out, int max_particles,
+                        const double cam_pos[3])
+{
+    int n = 0;
+    if (!out || max_particles <= 0 || !cam_pos) return 0;
+
+    for (int i = 0; i < MAX_COLLISION_PARTICLES && n < max_particles; i++) {
+        ImpactParticleState *p = &s_particles[i];
+        double t, fade, alpha, fade_t;
+        double dx, dy, dz, dist;
+        double dist_fade = 1.0;
+        if (!p->active) continue;
+        t = p->age / p->duration;
+        if (t < 0.0) t = 0.0;
+        if (t > 1.0) t = 1.0;
+        fade = 1.0 - t;
+        fade_t = (t - 0.78) / 0.22;
+        if (fade_t < 0.0) fade_t = 0.0;
+        if (fade_t > 1.0) fade_t = 1.0;
+        alpha = 1.0 - fade_t * fade_t;
+        dx = p->pos[0] * RS - cam_pos[0];
+        dy = p->pos[1] * RS - cam_pos[1];
+        dz = p->pos[2] * RS - cam_pos[2];
+        dist = sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist >= 0.30 * AU * RS) continue;
+        if (dist > 0.10 * AU * RS) {
+            dist_fade = 1.0 - (dist - 0.10 * AU * RS) / (0.20 * AU * RS);
+            if (dist_fade < 0.0) dist_fade = 0.0;
+        }
+        out[n].pos[0] = (float)dx;
+        out[n].pos[1] = (float)dy;
+        out[n].pos[2] = (float)dz;
+        out[n].color[0] = p->color[0] * (0.70f + 0.30f * (float)fade);
+        out[n].color[1] = p->color[1] * (0.70f + 0.30f * (float)fade);
+        out[n].color[2] = p->color[2] * (0.70f + 0.30f * (float)fade);
+        out[n].color[3] = (float)(alpha * dist_fade);
+        out[n].size = p->size;
+        n++;
+    }
+    return n;
 }
