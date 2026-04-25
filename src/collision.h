@@ -4,13 +4,14 @@
 #pragma once
 #include "common.h"
 
-#define COLLISION_MAX_SPOTS 16
+#define COLLISION_MAX_SPOTS 32
 
 typedef enum {
     COLLISION_VIS_CRATER    = 1,
     COLLISION_VIS_MAJOR     = 2,
     COLLISION_VIS_MERGE     = 3,
-    COLLISION_VIS_INTERSECT = 4  /* live sphere-sphere boundary during merge */
+    COLLISION_VIS_INTERSECT = 4, /* live sphere-sphere boundary during merge */
+    COLLISION_VIS_PERM_CRATER = 5
 } CollisionVisualKind;
 
 typedef struct {
@@ -19,6 +20,7 @@ typedef struct {
     float angular_radius;  /* radians on sphere */
     float heat;            /* 0..1 cooled intensity */
     float progress;        /* 0..1 event lifetime progress */
+    float seed;            /* stable shader variation seed */
     int   kind;            /* CollisionVisualKind */
 } CollisionSpot;
 

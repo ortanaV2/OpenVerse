@@ -54,6 +54,7 @@ static GLint  s_sp_impact_t1    = -1;
 static GLint  s_sp_impact_rad   = -1;
 static GLint  s_sp_impact_heat  = -1;
 static GLint  s_sp_impact_prog  = -1;
+static GLint  s_sp_impact_seed  = -1;
 static GLint  s_sp_impact_kind  = -1;
 
 /* Planet-type lookup by body name — robust against loader order changes.
@@ -402,6 +403,7 @@ void render_init(void) {
     s_sp_impact_rad   = glGetUniformLocation(s_sphere_shader, "u_impact_radius[0]");
     s_sp_impact_heat  = glGetUniformLocation(s_sphere_shader, "u_impact_heat[0]");
     s_sp_impact_prog  = glGetUniformLocation(s_sphere_shader, "u_impact_progress[0]");
+    s_sp_impact_seed  = glGetUniformLocation(s_sphere_shader, "u_impact_seed[0]");
     s_sp_impact_kind  = glGetUniformLocation(s_sphere_shader, "u_impact_kind[0]");
 
     /* Frame-constant camera parameters */
@@ -923,6 +925,7 @@ void render_frame(const float view[16], const float proj[16],
             float radii[COLLISION_MAX_SPOTS] = {0};
             float heats[COLLISION_MAX_SPOTS] = {0};
             float progress[COLLISION_MAX_SPOTS] = {0};
+            float seeds[COLLISION_MAX_SPOTS] = {0};
             int kinds[COLLISION_MAX_SPOTS] = {0};
             int nspots = collision_spots_for_body(i, spots);
             for (int k = 0; k < nspots; k++) {
@@ -935,6 +938,7 @@ void render_frame(const float view[16], const float proj[16],
                 radii[k] = spots[k].angular_radius;
                 heats[k] = spots[k].heat;
                 progress[k] = spots[k].progress;
+                seeds[k] = spots[k].seed;
                 kinds[k] = spots[k].kind;
             }
             glUniform1i(s_sp_impact_count, nspots);
@@ -943,6 +947,7 @@ void render_frame(const float view[16], const float proj[16],
             glUniform1fv(s_sp_impact_rad, nspots, radii);
             glUniform1fv(s_sp_impact_heat, nspots, heats);
             glUniform1fv(s_sp_impact_prog, nspots, progress);
+            glUniform1fv(s_sp_impact_seed, nspots, seeds);
             glUniform1iv(s_sp_impact_kind, nspots, kinds);
         }
 

@@ -41,12 +41,13 @@ uniform float u_rotation;     /* body rotation angle, radians           */
 uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
 uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
 uniform int   u_impact_count;
-uniform vec3  u_impact_dir[16];
-uniform vec3  u_impact_tangent1[16];
-uniform float u_impact_radius[16];
-uniform float u_impact_heat[16];
-uniform float u_impact_progress[16];
-uniform int   u_impact_kind[16];
+uniform vec3  u_impact_dir[32];
+uniform vec3  u_impact_tangent1[32];
+uniform float u_impact_radius[32];
+uniform float u_impact_heat[32];
+uniform float u_impact_progress[32];
+uniform float u_impact_seed[32];
+uniform int   u_impact_kind[32];
 
 out vec4 frag_color;
 
@@ -270,7 +271,8 @@ void main() {
                   tx * sr + tz * cr);
     }
 
-    vec3 surface = surface_color(NL);
+    vec3 base_surface = surface_color(NL);
+    vec3 surface = base_surface;
     vec3 lava_emit = vec3(0.0);
 
     /* Sun direction — computed once, reused for emission clamping inside the
@@ -279,13 +281,28 @@ void main() {
     vec3  L    = normalize(u_sun_rel - hit_rel);
     float diff = max(dot(N, L), 0.0);
 
-    for (int i = 0; i < 16; i++) {
+    /* Pre-pass: accumulate kind-4 (intersection) coverage so craters (kind 5)
+     * don't overwrite the live collision bloom regardless of slot order. */
+    float s_intersection = 0.0;
+    for (int i = 0; i < 32; i++) {
+        if (i >= u_impact_count) break;
+        if (u_impact_kind[i] != 4) continue;
+        vec3 jdir = normalize(u_impact_dir[i]);
+        float jrad = max(u_impact_radius[i], 0.001);
+        float jang = acos(clamp(dot(NL, jdir), -1.0, 1.0));
+        s_intersection = max(s_intersection,
+                             1.0 - smoothstep(jrad * 0.80, jrad * 1.55, jang));
+    }
+
+    for (int i = 0; i < 32; i++) {
         if (i >= u_impact_count) break;
         vec3 idir = normalize(u_impact_dir[i]);
+        vec3 it1 = normalize(u_impact_tangent1[i]);
         float ang = acos(clamp(dot(NL, idir), -1.0, 1.0));
         float rad = max(u_impact_radius[i], 0.001);
         float heat = clamp(u_impact_heat[i], 0.0, 1.0);
         float progress = clamp(u_impact_progress[i], 0.0, 1.0);
+        float seed = u_impact_seed[i];
         int kind = u_impact_kind[i];
         float core = 1.0 - smoothstep(0.0, rad * 0.30, ang);
         float melt = 1.0 - smoothstep(rad * 0.10, rad * 0.98, ang);
@@ -324,7 +341,7 @@ void main() {
             /* Live sphere-sphere intersection boundary.
              * rad = angular radius of the buried cap on this sphere.
              * Render the cap as molten lava with a bright ring at the edge. */
-            vec3 scar_t1 = normalize(u_impact_tangent1[i]);
+            vec3 scar_t1 = it1;
             vec3 scar_t2 = normalize(cross(idir, scar_t1));
             scar_t1 = normalize(cross(scar_t2, idir));
             vec3 scar_p = vec3(dot(NL, scar_t1),
@@ -363,6 +380,103 @@ void main() {
             float night_blend = 1.0 - diff * 0.80;
             lava_emit += seam_molten * edge_ring * heat * 1.8 * night_blend;
             lava_emit += seam_warm * outer_fringe * heat * 0.9 * night_blend;
+        } else if (kind == 5) {
+            vec3 scar_t1 = it1;
+            vec3 scar_t2 = normalize(cross(idir, scar_t1));
+            scar_t1 = normalize(cross(scar_t2, idir));
+            vec3 scar_p = vec3(dot(NL, scar_t1),
+                               dot(NL, scar_t2),
+                               dot(NL, idir) - cos(rad));
+            vec2 crater_uv = scar_p.xy / max(rad, 0.001);
+            float crater_r = length(crater_uv);
+            float crater_ang = atan(crater_uv.y, crater_uv.x);
+            float crater_scale = 5.4 / max(rad, 0.08);
+            vec3 crater_q = vec3(scar_p.xy * crater_scale + vec2(seed * 0.07, seed * 0.11),
+                                 scar_p.z * 5.6 + seed * 0.05);
+            float crater_coarse = vnoise(crater_q * 0.56 + vec3(1.7, 3.2, 4.4));
+            float crater_fine = fbm(crater_q * 1.45 + vec3(6.1, 2.4, 1.8));
+            float crater_rubble = vnoise(crater_q * 2.6 + vec3(2.8, 5.4, 1.3));
+            float crater_fracture = fbm(vec3(crater_ang * 2.1 + seed * 0.03,
+                                             crater_r * 3.6,
+                                             seed * 0.09));
+            float crater_chunks = fbm(crater_q * 3.4 + vec3(8.2, 1.6, 4.7));
+            float radial_rays = sin(crater_ang * 9.0 + seed * 0.21) * 0.5 + 0.5;
+            float radial_rays2 = sin(crater_ang * 5.0 - seed * 0.17) * 0.5 + 0.5;
+            float radial_rays3 = sin(crater_ang * 13.0 + seed * 0.29) * 0.5 + 0.5;
+            float crater_var = (crater_coarse - 0.5) * 0.38 + (crater_fine - 0.5) * 0.24;
+            float rubble_var = (crater_rubble - 0.5) * 0.28;
+            float chunk_var = (crater_chunks - 0.5) * 0.26;
+            float fracture_var = (crater_fracture - 0.5) * 0.32;
+            float ray_break = (radial_rays - 0.5) * 0.05 + (radial_rays2 - 0.5) * 0.03;
+            float rim_shift = crater_var * 0.05 + fracture_var * 0.08 + ray_break;
+            float bowl = 1.0 - smoothstep(0.0, 0.54 + crater_var * 0.05, crater_r);
+            float inner_slope = smoothstep(0.14 + crater_var * 0.03, 0.70 + crater_var * 0.05, crater_r);
+            float wall_band = smoothstep(0.30 + crater_var * 0.04, 0.78 + rim_shift, crater_r)
+                            * (1.0 - smoothstep(0.78 + rim_shift, 0.96 + rim_shift, crater_r));
+            float rim = smoothstep(0.74 + rim_shift, 0.88 + rim_shift, crater_r)
+                      * (1.0 - smoothstep(0.88 + rim_shift, 1.02 + rim_shift, crater_r));
+            float fractured_band = smoothstep(0.24 + crater_var * 0.03, 0.96 + rim_shift, crater_r)
+                                 * (1.0 - smoothstep(0.96 + rim_shift, 1.14 + rim_shift, crater_r));
+            float crater_mask = 1.0 - smoothstep(0.78 + crater_var * 0.04, 1.14 + rim_shift, crater_r);
+            float outer_fade = 1.0 - smoothstep(0.92 + crater_var * 0.03, 1.14 + rim_shift, crater_r);
+            float central_peak = 0.0; /* disabled */
+            /* terrace — concentric step at ~50 % radius */
+            float terrace = smoothstep(0.38 + crater_var * 0.03, 0.52 + crater_var * 0.04, crater_r)
+                          * (1.0 - smoothstep(0.52 + crater_var * 0.04, 0.66 + crater_var * 0.03, crater_r));
+            float radial_mix = radial_rays * 0.50 + radial_rays2 * 0.28 + radial_rays3 * 0.22;
+            float radial_fractures = smoothstep(0.58, 0.84, radial_mix)
+                                   * smoothstep(0.12, 0.56, crater_r)
+                                   * (1.0 - smoothstep(0.56, 0.80, crater_r));
+            /* ejecta streaks stay within the crater rim */
+            float ejecta_streaks = smoothstep(0.62, 0.90, radial_mix)
+                                 * smoothstep(0.68, 0.82, crater_r)
+                                 * (1.0 - smoothstep(0.82, 0.96, crater_r));
+            float depth = heat;
+            float earth_crater = u_planet_type == 1 ? 1.0 : 0.0;
+            float size_fade = smoothstep(0.006, 0.18, rad);
+            float crater_alpha = mix(0.58, 1.0, earth_crater) * mix(0.08, 1.0, size_fade)
+                               * (1.0 - s_intersection * 0.95);
+            vec3 warm_brown = mix(vec3(0.18, 0.14, 0.11), vec3(0.34, 0.26, 0.18), crater_coarse);
+            vec3 dusty_brown = mix(vec3(0.24, 0.19, 0.14), vec3(0.42, 0.33, 0.24), crater_fine);
+            vec3 ridge_brown = mix(vec3(0.32, 0.25, 0.18), vec3(0.50, 0.40, 0.30), crater_coarse * 0.65 + crater_fine * 0.35);
+            vec3 crater_dark = mix(base_surface * 0.28, warm_brown, earth_crater * 0.25 + 0.75);
+            vec3 crater_mid = mix(base_surface * 0.52, dusty_brown, earth_crater * 0.15 + 0.55);
+            vec3 crater_ridge = mix(base_surface * 0.74, ridge_brown, earth_crater * 0.10 + 0.45);
+            vec3 crater_floor_col = mix(crater_dark * 0.72, crater_mid * 0.84,
+                                        0.16 + crater_var * 0.18 + rubble_var * 0.20 + chunk_var * 0.18);
+            vec3 crater_wall_col = mix(crater_dark * 0.92, crater_mid,
+                                       0.48 + crater_var * 0.18 + rubble_var * 0.16 + chunk_var * 0.14);
+            vec3 crater_surface = mix(crater_floor_col, crater_wall_col, inner_slope);
+            vec3 crater_rim_col = mix(crater_surface, crater_ridge, 0.78 + crater_var * 0.12 + rubble_var * 0.12 + chunk_var * 0.10);
+            vec3 fractured_col = mix(crater_dark * 0.85, crater_ridge,
+                                     0.44 + crater_fine * 0.18 + rubble_var * 0.26 + chunk_var * 0.16);
+            vec3 chunk_col = mix(crater_dark * 0.90, crater_mid * 1.05, 0.42 + chunk_var * 0.28);
+            crater_surface = mix(crater_surface, chunk_col,
+                                 smoothstep(0.54, 0.82, crater_chunks)
+                                 * smoothstep(0.10, 0.88, crater_r)
+                                 * (1.0 - smoothstep(0.88, 1.02, crater_r))
+                                 * 0.34);
+            crater_surface = mix(crater_surface, fractured_col,
+                                 fractured_band * (0.30 + crater_rubble * 0.22 + max(fracture_var, 0.0) * 0.85));
+            crater_surface = mix(crater_surface, crater_dark * 0.62,
+                                 radial_fractures * (0.62 + max(fracture_var, 0.0) * 0.55));
+            crater_surface = mix(crater_surface, crater_wall_col * 0.68, bowl * (0.34 + depth * 0.22));
+            crater_surface = mix(crater_surface, crater_wall_col, wall_band * (0.58 + depth * 0.18));
+            crater_surface = mix(crater_surface, crater_rim_col, rim * (0.56 + max(fracture_var, 0.0) * 0.24));
+            /* terrace step — slightly lighter than wall, with rubble variation */
+            vec3 terrace_col = mix(crater_wall_col * 0.88, crater_ridge * 0.82,
+                                   0.45 + crater_var * 0.20 + rubble_var * 0.18);
+            crater_surface = mix(crater_surface, terrace_col,
+                                 terrace * (0.58 + max(fracture_var, 0.0) * 0.30));
+            /* central peak — bright rocky protrusion */
+            vec3 peak_col = mix(crater_mid * 1.06, crater_ridge * 0.92,
+                                crater_coarse * 0.55 + crater_fine * 0.45);
+            crater_surface = mix(crater_surface, peak_col, central_peak * 0.74);
+
+            surface = mix(surface, crater_surface, crater_alpha * crater_mask * outer_fade);
+            surface = mix(surface, crater_floor_col * 0.72, crater_alpha * bowl * (0.48 + depth * 0.26));
+            surface = mix(surface, crater_rim_col, crater_alpha * rim * (0.30 + depth * 0.14));
+            surface = mix(surface, crater_mid * 1.04, crater_alpha * ejecta_streaks * 0.34);
         }
     }
 

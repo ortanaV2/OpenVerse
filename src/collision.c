@@ -25,6 +25,7 @@
 #define MERGE_COOL_SECONDS (DAY * 180.0)
 #define MERGE_PHASE_SECONDS (DAY * 8.0)
 #define MAX_MERGES 16
+#define MAX_PERSISTENT_SCARS 128
 #define MAX_COLLISION_PARTICLES 768
 
 typedef struct {
@@ -39,6 +40,17 @@ typedef struct {
     float radius1;
     float heat0;
 } ImpactEvent;
+
+typedef struct {
+    int active;
+    int body;
+    unsigned int stamp;
+    float dir[3];
+    float tangent1[3];
+    float angular_radius;
+    float depth;
+    float seed;
+} PersistentScar;
 
 typedef struct {
     int active;
@@ -81,6 +93,7 @@ typedef struct {
 } ImpactParticleState;
 
 static ImpactEvent s_impacts[MAX_IMPACTS];
+static PersistentScar s_perm_scars[MAX_PERSISTENT_SCARS];
 static RadiusTransition s_radius_fx[MAX_BODIES];
 static MergeEvent s_merges[MAX_MERGES];
 static ImpactParticleState s_particles[MAX_COLLISION_PARTICLES];
@@ -88,6 +101,7 @@ static double s_pair_next[MAX_BODIES][MAX_BODIES];
 static unsigned char s_system_dirty[MAX_BODIES];
 static double s_system_hot[MAX_BODIES];
 static unsigned int s_particle_rng = 0x1234abcdu;
+static unsigned int s_perm_scar_stamp = 1u;
 static double s_pos_before[MAX_BODIES][3];
 static int s_pos_before_valid = 0;
 
@@ -169,6 +183,11 @@ static double rand01(void)
 {
     s_particle_rng = 1664525u * s_particle_rng + 1013904223u;
     return (double)(s_particle_rng & 0x00ffffffu) / (double)0x01000000u;
+}
+
+static float rand01f(void)
+{
+    return (float)rand01();
 }
 
 static void orthonormal_basis(const double n[3], double t1[3], double t2[3])
@@ -287,6 +306,10 @@ static void build_local_scar_tangent(int body_idx, const double world_dir[3],
     normalize3f(out_local_t1);
 }
 
+static void add_permanent_crater(int body_idx, const double world_dir[3],
+                                 const double rel_vel[3], double impactor_radius,
+                                 double strength);
+
 static double body_moment_of_inertia(const Body *b)
 {
     if (!b) return 0.0;
@@ -306,13 +329,6 @@ static double obliquity_from_spin_axis(const double axis[3])
     return atan2(axis[0], axis[1]) * (180.0 / PI);
 }
 
-static double wrap_angle_pm_pi(double a)
-{
-    while (a > PI) a -= 2.0 * PI;
-    while (a < -PI) a += 2.0 * PI;
-    return a;
-}
-
 static void compute_collision_spin_state(int target, int impactor,
                                          const double contact_dir[3],
                                          const double rel_vel[3],
@@ -323,7 +339,7 @@ static void compute_collision_spin_state(int target, int impactor,
     const Body *b = &g_bodies[impactor];
     double axis_a[3], axis_b[3], merged_axis[3];
     double L_spin_a[3], L_spin_b[3], L_orbit[3], L_total[3];
-    double contact_r[3], merged_I, planar_len;
+    double contact_r[3], merged_I, planar_len, axis_dot;
 
     spin_axis_from_obliquity(a->obliquity, axis_a);
     spin_axis_from_obliquity(b->obliquity, axis_b);
@@ -370,6 +386,16 @@ static void compute_collision_spin_state(int target, int impactor,
         merged_axis[0] = L_total[0] / planar_len;
         merged_axis[1] = L_total[1] / planar_len;
         merged_axis[2] = 0.0;
+    }
+
+    /* Axis direction and spin-rate sign are interchangeable in the current
+     * obliquity+rotation_rate model. Keep the chosen axis close to the
+     * target's pre-impact axis so the resulting rotation can be signed
+     * correctly instead of always collapsing to a positive spin. */
+    axis_dot = merged_axis[0] * axis_a[0] + merged_axis[1] * axis_a[1];
+    if (axis_dot < 0.0) {
+        merged_axis[0] = -merged_axis[0];
+        merged_axis[1] = -merged_axis[1];
     }
 
     merged_I = 0.40 * (a->mass + b->mass)
@@ -791,8 +817,55 @@ static void add_impact(int body_idx, int kind, const double world_dir[3],
     body_world_to_local_surface_dir(body_idx, world_dir, e->dir);
     normalize3f(e->dir);
     build_local_scar_tangent(body_idx, world_dir, rel_vel, e->tangent1);
+    if (kind == COLLISION_VIS_CRATER || kind == COLLISION_VIS_MAJOR)
+        add_permanent_crater(body_idx, world_dir, rel_vel, impactor_radius,
+                             kind == COLLISION_VIS_MAJOR ? 1.0 : 0.65 + 0.25 * fmin(mass_ratio, 1.0));
     spawn_impact_particles(body_idx, kind, world_dir, rel_vel,
                            impactor_radius, rel_speed, 1.0);
+}
+
+static void add_permanent_crater(int body_idx, const double world_dir[3],
+                                 const double rel_vel[3], double impactor_radius,
+                                 double strength)
+{
+    int slot = -1;
+    int oldest = 0;
+    double radius_limit;
+    float local_dir[3];
+    PersistentScar *s;
+
+    if (body_idx < 0 || body_idx >= g_nbodies) return;
+    if (!g_bodies[body_idx].alive) return;
+    if (impactor_radius <= 0.0) return;
+
+    radius_limit = asin(fmin(0.999, impactor_radius / fmax(g_bodies[body_idx].radius, impactor_radius)));
+    radius_limit *= 0.92 + 0.10 * fmin(fmax(strength, 0.0), 1.0);
+    if (radius_limit < 0.006) radius_limit = 0.006;
+
+    for (int i = 0; i < MAX_PERSISTENT_SCARS; i++) {
+        if (!s_perm_scars[i].active) {
+            slot = i;
+            break;
+        }
+        if (s_perm_scars[i].stamp < s_perm_scars[oldest].stamp)
+            oldest = i;
+    }
+    if (slot < 0) slot = oldest;
+
+    s = &s_perm_scars[slot];
+    s->active = 1;
+    s->body = body_idx;
+    s->stamp = s_perm_scar_stamp++;
+    if (s_perm_scar_stamp == 0u) s_perm_scar_stamp = 1u;
+    body_world_to_local_surface_dir(body_idx, world_dir, local_dir);
+    normalize3f(local_dir);
+    s->dir[0] = local_dir[0];
+    s->dir[1] = local_dir[1];
+    s->dir[2] = local_dir[2];
+    build_local_scar_tangent(body_idx, world_dir, rel_vel, s->tangent1);
+    s->angular_radius = (float)radius_limit;
+    s->depth = 0.45f + 0.35f * (float)fmin(fmax(strength, 0.0), 1.0);
+    s->seed = rand01f() * 100.0f;
 }
 
 static double trail_interval_for_body_after_merge(int body_idx)
@@ -1171,6 +1244,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     s_merges[slot].target_obliquity       = a->obliquity;
     s_merges[slot].scar_slot     = -1;
     s_merges[slot].imp_scar_slot = -1;
+    add_permanent_crater(target, dir, rel_vel, b->radius, 1.0);
 
     {
         double anim_dur = merge_duration_for_bodies(target, impactor, rel_speed);
@@ -1666,6 +1740,23 @@ int collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPO
     int n = 0;
     if (!spots || body_idx < 0 || body_idx >= g_nbodies) return 0;
 
+    for (int i = 0; i < MAX_PERSISTENT_SCARS && n < COLLISION_MAX_SPOTS; i++) {
+        PersistentScar *s = &s_perm_scars[i];
+        if (!s->active || s->body != body_idx) continue;
+        spots[n].dir[0] = s->dir[0];
+        spots[n].dir[1] = s->dir[1];
+        spots[n].dir[2] = s->dir[2];
+        spots[n].tangent1[0] = s->tangent1[0];
+        spots[n].tangent1[1] = s->tangent1[1];
+        spots[n].tangent1[2] = s->tangent1[2];
+        spots[n].angular_radius = s->angular_radius;
+        spots[n].heat = s->depth;
+        spots[n].progress = 0.0f;
+        spots[n].seed = s->seed;
+        spots[n].kind = COLLISION_VIS_PERM_CRATER;
+        n++;
+    }
+
     for (int i = 0; i < MAX_IMPACTS && n < COLLISION_MAX_SPOTS; i++) {
         ImpactEvent *e = &s_impacts[i];
         double t;
@@ -1692,6 +1783,7 @@ int collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPO
         spots[n].angular_radius = (float)rad;
         spots[n].heat = heat;
         spots[n].progress = (float)t;
+        spots[n].seed = 0.0f;
         spots[n].kind = e->kind;
         n++;
         }
