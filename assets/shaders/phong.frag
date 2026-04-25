@@ -42,6 +42,7 @@ uniform float u_obliquity;    /* axial tilt, radians (0 = upright)      */
 uniform int   u_planet_type;  /* 0-9, selects colour recipe             */
 uniform int   u_impact_count;
 uniform vec3  u_impact_dir[16];
+uniform vec3  u_impact_tangent1[16];
 uniform float u_impact_radius[16];
 uniform float u_impact_heat[16];
 uniform float u_impact_progress[16];
@@ -323,22 +324,45 @@ void main() {
             /* Live sphere-sphere intersection boundary.
              * rad = angular radius of the buried cap on this sphere.
              * Render the cap as molten lava with a bright ring at the edge. */
+            vec3 scar_t1 = normalize(u_impact_tangent1[i]);
+            vec3 scar_t2 = normalize(cross(idir, scar_t1));
+            scar_t1 = normalize(cross(scar_t2, idir));
+            vec3 scar_p = vec3(dot(NL, scar_t1),
+                               dot(NL, scar_t2),
+                               dot(NL, idir) - cos(rad));
+            float scar_scale = 8.0 / max(rad, 0.08);
+            vec3 scar_q = vec3(scar_p.xy * (scar_scale * 1.18),
+                               scar_p.z * 4.8);
+            float seam_noise = fbm(scar_q);
+            float seam_var = (seam_noise - 0.5) * 0.22;
+            float seam_coarse = vnoise(scar_q * 0.58 + vec3(3.1, 1.7, 4.9));
+            float seam_coarse_var = (seam_coarse - 0.5) * 0.26;
+            float cool_phase = smoothstep(0.34, 0.88, progress);
             float inside_cap  = 1.0 - smoothstep(rad * 0.80, rad * 1.10, ang);
             float edge_ring   = smoothstep(rad * 0.55, rad * 0.85, ang)
                               * (1.0 - smoothstep(rad * 0.85, rad * 1.55, ang));
             float outer_fringe = smoothstep(rad * 0.98, rad * 1.30, ang)
                                * (1.0 - smoothstep(rad * 1.30, rad * 1.95, ang));
+            vec3 seam_hot = lava_color(clamp(min(1.0, heat * 1.02 + 0.06) + seam_var * 0.55, 0.0, 1.0));
+            vec3 seam_molten = lava_color(clamp(min(1.0, heat * 0.82 + 0.08)
+                                                + seam_var * 0.34
+                                                + seam_coarse_var * (0.10 + 0.18 * cool_phase), 0.0, 1.0));
+            vec3 seam_warm = lava_color(clamp(heat * 0.58 + seam_var * 0.18 + seam_coarse_var * 0.28, 0.0, 1.0));
+            vec3 seam_deep = lava_color(clamp(heat * 0.34 + seam_var * 0.08 + seam_coarse_var * 0.24, 0.0, 1.0));
+            vec3 seam_core = mix(seam_molten, seam_hot, inside_cap * 0.75 + (1.0 - progress) * 0.25);
+            seam_core = mix(seam_core, mix(seam_deep, seam_molten, 0.62 + seam_coarse * 0.18),
+                            cool_phase * (1.0 - inside_cap * 0.55));
 
-            surface = mix(surface, mix(lava_deep, lava_molten, inside_cap * 0.7),
+            surface = mix(surface, mix(seam_deep, seam_core, inside_cap * 0.7),
                           inside_cap * heat * 0.88);
-            lava_emit += mix(lava_warm, lava_molten, inside_cap) * inside_cap * heat * 1.65;
+            lava_emit += mix(seam_warm, seam_molten, inside_cap) * inside_cap * heat * 1.65;
             /* Dampen edge/fringe glow on the lit side: viewing from the sun
              * direction the ring at ang≈90° (the equatorial limb) would
              * otherwise appear as a bright orange halo that looks transparent.
              * Keep full intensity on the night side (diff≈0).              */
             float night_blend = 1.0 - diff * 0.80;
-            lava_emit += lava_molten * edge_ring * heat * 1.8 * night_blend;
-            lava_emit += lava_warm * outer_fringe * heat * 0.9 * night_blend;
+            lava_emit += seam_molten * edge_ring * heat * 1.8 * night_blend;
+            lava_emit += seam_warm * outer_fringe * heat * 0.9 * night_blend;
         }
     }
 

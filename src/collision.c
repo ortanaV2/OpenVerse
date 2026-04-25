@@ -34,6 +34,7 @@ typedef struct {
     double age;
     double duration;
     float dir[3];
+    float tangent1[3];
     float radius0;
     float radius1;
     float heat0;
@@ -57,6 +58,7 @@ typedef struct {
     double dir[3];
     double rel_vel[3];
     double target_local_attach_dir[3];
+    double target_local_attach_t1[3];
     double start_sep;
     double particle_emit_accum;
     double particle_emit_next;
@@ -240,6 +242,49 @@ static void body_local_surface_dir_to_world(int body_idx, const double local_dir
         return;
     }
     out[0] /= len; out[1] /= len; out[2] /= len;
+}
+
+static void build_local_scar_tangent(int body_idx, const double world_dir[3],
+                                     const double rel_vel[3], float out_local_t1[3])
+{
+    double world_t1[3];
+    double fallback_t1[3], fallback_t2[3];
+    double dotn;
+
+    if (!out_local_t1) return;
+    if (!world_dir) {
+        out_local_t1[0] = 1.0f;
+        out_local_t1[1] = 0.0f;
+        out_local_t1[2] = 0.0f;
+        return;
+    }
+
+    if (rel_vel) {
+        double len;
+        dotn = dot3d(rel_vel, world_dir);
+        world_t1[0] = rel_vel[0] - world_dir[0] * dotn;
+        world_t1[1] = rel_vel[1] - world_dir[1] * dotn;
+        world_t1[2] = rel_vel[2] - world_dir[2] * dotn;
+        len = sqrt(dot3d(world_t1, world_t1));
+        if (len > 1e-12) {
+            world_t1[0] /= len;
+            world_t1[1] /= len;
+            world_t1[2] /= len;
+        } else {
+            orthonormal_basis(world_dir, fallback_t1, fallback_t2);
+            world_t1[0] = fallback_t1[0];
+            world_t1[1] = fallback_t1[1];
+            world_t1[2] = fallback_t1[2];
+        }
+    } else {
+        orthonormal_basis(world_dir, fallback_t1, fallback_t2);
+        world_t1[0] = fallback_t1[0];
+        world_t1[1] = fallback_t1[1];
+        world_t1[2] = fallback_t1[2];
+    }
+
+    body_world_to_local_surface_dir(body_idx, world_t1, out_local_t1);
+    normalize3f(out_local_t1);
 }
 
 static double body_moment_of_inertia(const Body *b)
@@ -745,6 +790,7 @@ static void add_impact(int body_idx, int kind, const double world_dir[3],
             radius_ratio, e->radius0, e->radius1, e->duration / DAY);
     body_world_to_local_surface_dir(body_idx, world_dir, e->dir);
     normalize3f(e->dir);
+    build_local_scar_tangent(body_idx, world_dir, rel_vel, e->tangent1);
     spawn_impact_particles(body_idx, kind, world_dir, rel_vel,
                            impactor_radius, rel_speed, 1.0);
 }
@@ -844,6 +890,7 @@ static void update_merge_events(double dt)
         double t, overlap_sep;
         double speed_boost;
         double attach_world_dir[3];
+        double attach_world_t1[3];
 
         if (!m->active) continue;
         if (m->target < 0 || m->target >= g_nbodies ||
@@ -866,6 +913,8 @@ static void update_merge_events(double dt)
         m->particle_emit_accum += dt;
         body_local_surface_dir_to_world(m->target, m->target_local_attach_dir,
                                         attach_world_dir);
+        body_local_surface_dir_to_world(m->target, m->target_local_attach_t1,
+                                        attach_world_t1);
 
         /* Lock impactor velocity to target. */
         impactor->vel[0] = target->vel[0];
@@ -983,6 +1032,9 @@ static void update_merge_events(double dt)
                     scar->dir[0] = (float)m->target_local_attach_dir[0];
                     scar->dir[1] = (float)m->target_local_attach_dir[1];
                     scar->dir[2] = (float)m->target_local_attach_dir[2];
+                    scar->tangent1[0] = (float)m->target_local_attach_t1[0];
+                    scar->tangent1[1] = (float)m->target_local_attach_t1[1];
+                    scar->tangent1[2] = (float)m->target_local_attach_t1[2];
                 }
             }
             scar->age = 0.0; /* frozen at full heat until merge ends */
@@ -1002,16 +1054,22 @@ static void update_merge_events(double dt)
                 float cap = (float)acos(cos_a);
                 if (cap > scar->radius0) {
                     float local_dir[3];
+                    float local_t1[3];
                     double neg_dir[3] = {-attach_world_dir[0], -attach_world_dir[1], -attach_world_dir[2]};
                     float boost = (float)(0.05 + 0.10 * fmin(speed_boost, 1.2));
                     scar->radius0 = cap;
                     scar->radius1 = fminf((float)(PI * 0.88),
                                           fmaxf(scar->radius1, cap * (1.06f + boost)));
                     body_world_to_local_surface_dir(m->impactor, neg_dir, local_dir);
+                    body_world_to_local_surface_dir(m->impactor, attach_world_t1, local_t1);
                     normalize3f(local_dir);
+                    normalize3f(local_t1);
                     scar->dir[0] = local_dir[0];
                     scar->dir[1] = local_dir[1];
                     scar->dir[2] = local_dir[2];
+                    scar->tangent1[0] = local_t1[0];
+                    scar->tangent1[1] = local_t1[1];
+                    scar->tangent1[2] = local_t1[2];
                 }
             }
             scar->age = 0.0;
@@ -1062,7 +1120,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     Body *b = &g_bodies[impactor];
     double total = a->mass + b->mass;
     double merged_radius;
-    float local_dir[3];
+    float local_dir[3], local_t1[3];
 
     for (int i = 0; i < MAX_MERGES; i++) {
         if (!s_merges[i].active) { slot = i; break; }
@@ -1102,6 +1160,10 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     s_merges[slot].target_local_attach_dir[0] = local_dir[0];
     s_merges[slot].target_local_attach_dir[1] = local_dir[1];
     s_merges[slot].target_local_attach_dir[2] = local_dir[2];
+    build_local_scar_tangent(target, dir, rel_vel, local_t1);
+    s_merges[slot].target_local_attach_t1[0] = local_t1[0];
+    s_merges[slot].target_local_attach_t1[1] = local_t1[1];
+    s_merges[slot].target_local_attach_t1[2] = local_t1[2];
     s_merges[slot].particle_emit_accum    = 0.0;
     s_merges[slot].particle_emit_next     = 0.0;
     s_merges[slot].target_rotation_rate   = a->rotation_rate;
@@ -1152,18 +1214,23 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         scar->duration = MERGE_COOL_SECONDS;
         scar->heat0    = 1.0f;
         scar->radius0  = 0.0f;
-        scar->radius1  = (float)(0.22 + 0.12 * fmin(merge_speed_boost(rel_speed), 1.5));
+        scar->radius1  = (float)(0.18 + 0.08 * fmin(merge_speed_boost(rel_speed), 1.5));
         scar->dir[0]   = local_dir[0];
         scar->dir[1]   = local_dir[1];
         scar->dir[2]   = local_dir[2];
+        scar->tangent1[0] = (float)s_merges[slot].target_local_attach_t1[0];
+        scar->tangent1[1] = (float)s_merges[slot].target_local_attach_t1[1];
+        scar->tangent1[2] = (float)s_merges[slot].target_local_attach_t1[2];
         s_merges[slot].scar_slot = scar_slot;
     }
 
     /* Impactor-side scar: same setup, direction reversed. */
     {
         double neg_dir[3] = {-dir[0], -dir[1], -dir[2]};
+        double world_t1[3];
         int k, scar_slot = -1;
         float local_dir[3];
+        float local_t1[3];
         ImpactEvent *scar;
         for (k = 0; k < MAX_IMPACTS; k++) {
             if (!s_impacts[k].active) { scar_slot = k; break; }
@@ -1173,8 +1240,11 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
             for (k = 1; k < MAX_IMPACTS; k++)
                 if (s_impacts[k].age > s_impacts[scar_slot].age) scar_slot = k;
         }
+        body_local_surface_dir_to_world(target, s_merges[slot].target_local_attach_t1, world_t1);
         body_world_to_local_surface_dir(impactor, neg_dir, local_dir);
+        body_world_to_local_surface_dir(impactor, world_t1, local_t1);
         normalize3f(local_dir);
+        normalize3f(local_t1);
         scar = &s_impacts[scar_slot];
         scar->active   = 1;
         scar->body     = impactor;
@@ -1183,10 +1253,13 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         scar->duration = MERGE_COOL_SECONDS;
         scar->heat0    = 1.0f;
         scar->radius0  = 0.0f;
-        scar->radius1  = (float)(0.18 + 0.10 * fmin(merge_speed_boost(rel_speed), 1.5));
+        scar->radius1  = (float)(0.15 + 0.07 * fmin(merge_speed_boost(rel_speed), 1.5));
         scar->dir[0]   = local_dir[0];
         scar->dir[1]   = local_dir[1];
         scar->dir[2]   = local_dir[2];
+        scar->tangent1[0] = local_t1[0];
+        scar->tangent1[1] = local_t1[1];
+        scar->tangent1[2] = local_t1[2];
         s_merges[slot].imp_scar_slot = scar_slot;
     }
 
@@ -1613,6 +1686,9 @@ int collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPO
         spots[n].dir[0] = e->dir[0];
         spots[n].dir[1] = e->dir[1];
         spots[n].dir[2] = e->dir[2];
+        spots[n].tangent1[0] = e->tangent1[0];
+        spots[n].tangent1[1] = e->tangent1[1];
+        spots[n].tangent1[2] = e->tangent1[2];
         spots[n].angular_radius = (float)rad;
         spots[n].heat = heat;
         spots[n].progress = (float)t;

@@ -50,6 +50,7 @@ static GLint  s_sp_obliquity   = -1;
 static GLint  s_sp_ptype       = -1;
 static GLint  s_sp_impact_count = -1;
 static GLint  s_sp_impact_dir   = -1;
+static GLint  s_sp_impact_t1    = -1;
 static GLint  s_sp_impact_rad   = -1;
 static GLint  s_sp_impact_heat  = -1;
 static GLint  s_sp_impact_prog  = -1;
@@ -397,6 +398,7 @@ void render_init(void) {
     s_sp_ptype     = glGetUniformLocation(s_sphere_shader, "u_planet_type");
     s_sp_impact_count = glGetUniformLocation(s_sphere_shader, "u_impact_count");
     s_sp_impact_dir   = glGetUniformLocation(s_sphere_shader, "u_impact_dir[0]");
+    s_sp_impact_t1    = glGetUniformLocation(s_sphere_shader, "u_impact_tangent1[0]");
     s_sp_impact_rad   = glGetUniformLocation(s_sphere_shader, "u_impact_radius[0]");
     s_sp_impact_heat  = glGetUniformLocation(s_sphere_shader, "u_impact_heat[0]");
     s_sp_impact_prog  = glGetUniformLocation(s_sphere_shader, "u_impact_progress[0]");
@@ -917,6 +919,7 @@ void render_frame(const float view[16], const float proj[16],
         {
             CollisionSpot spots[COLLISION_MAX_SPOTS];
             float dirs[COLLISION_MAX_SPOTS * 3] = {0};
+            float tangents[COLLISION_MAX_SPOTS * 3] = {0};
             float radii[COLLISION_MAX_SPOTS] = {0};
             float heats[COLLISION_MAX_SPOTS] = {0};
             float progress[COLLISION_MAX_SPOTS] = {0};
@@ -926,6 +929,9 @@ void render_frame(const float view[16], const float proj[16],
                 dirs[k*3+0] = spots[k].dir[0];
                 dirs[k*3+1] = spots[k].dir[1];
                 dirs[k*3+2] = spots[k].dir[2];
+                tangents[k*3+0] = spots[k].tangent1[0];
+                tangents[k*3+1] = spots[k].tangent1[1];
+                tangents[k*3+2] = spots[k].tangent1[2];
                 radii[k] = spots[k].angular_radius;
                 heats[k] = spots[k].heat;
                 progress[k] = spots[k].progress;
@@ -933,6 +939,7 @@ void render_frame(const float view[16], const float proj[16],
             }
             glUniform1i(s_sp_impact_count, nspots);
             glUniform3fv(s_sp_impact_dir, nspots, dirs);
+            glUniform3fv(s_sp_impact_t1, nspots, tangents);
             glUniform1fv(s_sp_impact_rad, nspots, radii);
             glUniform1fv(s_sp_impact_heat, nspots, heats);
             glUniform1fv(s_sp_impact_prog, nspots, progress);

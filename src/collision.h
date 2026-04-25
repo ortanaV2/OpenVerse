@@ -15,6 +15,7 @@ typedef enum {
 
 typedef struct {
     float dir[3];          /* body-local unit direction */
+    float tangent1[3];     /* stable body-local tangent basis for scar noise */
     float angular_radius;  /* radians on sphere */
     float heat;            /* 0..1 cooled intensity */
     float progress;        /* 0..1 event lifetime progress */
