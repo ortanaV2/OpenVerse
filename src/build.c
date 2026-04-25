@@ -20,6 +20,7 @@ int g_build_tab_held = 0;
 static int s_selected = 0;
 static int s_prev_paused = 0;
 static int s_place_serial = 1;
+static unsigned int s_build_rng = 0x51f15eedu;
 
 #define BUILD_REF_LOCAL_AU        0.018
 #define BUILD_REF_INTERSTELLAR_AU 1200.0
@@ -29,17 +30,133 @@ static int s_place_serial = 1;
 #define BUILD_PARENT_STAR_MAX_AU  250.0
 
 static const BuildPreset s_presets[] = {
-    { "Rocky",    5.972e24,  6371.0e3,  {0.32f, 0.58f, 0.92f}, 0, 1, 0, {0.45f, 0.65f, 1.00f}, 0.45f, 1.25f },
-    { "Gas Giant",1.898e27, 71492.0e3,  {0.86f, 0.68f, 0.46f}, 0, 1, 0, {0.90f, 0.72f, 0.50f}, 0.25f, 1.22f },
-    { "Ice World",8.681e25,25559.0e3,  {0.54f, 0.86f, 0.96f}, 0, 1, 0, {0.62f, 0.90f, 1.00f}, 0.22f, 1.22f },
-    { "Moon",     7.342e22, 1737.4e3,  {0.72f, 0.72f, 0.68f}, 0, 0, 1, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
-    { "Dwarf",    1.309e22, 1188.3e3,  {0.68f, 0.63f, 0.58f}, 0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
-    { "Star",     1.989e30,696000.0e3, {1.00f, 0.92f, 0.28f}, 1, 0, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f }
+    { "Rocky Planet", 5.972e24,   6371.0e3,  {0.52f, 0.44f, 0.36f}, BUILD_VIS_ROCKY,        0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Gas Giant",    1.898e27,  71492.0e3,  {0.84f, 0.70f, 0.50f}, BUILD_VIS_GAS_GIANT,    0, 1, 0, {0.90f, 0.72f, 0.50f}, 0.25f, 1.22f },
+    { "Ice Planet",   8.681e25,  25559.0e3,  {0.62f, 0.84f, 0.96f}, BUILD_VIS_ICE_PLANET,   0, 1, 0, {0.62f, 0.90f, 1.00f}, 0.22f, 1.22f },
+    { "Moon",         7.342e22,   1737.4e3,  {0.72f, 0.72f, 0.68f}, BUILD_VIS_MOON,         0, 0, 1, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Dwarf Planet", 1.309e22,   1188.3e3,  {0.68f, 0.63f, 0.58f}, BUILD_VIS_DWARF_PLANET, 0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Star",         1.989e30, 696000.0e3,  {1.00f, 0.92f, 0.28f}, BUILD_VIS_STAR,         1, 0, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f }
 };
+
+static double build_rand01(void)
+{
+    s_build_rng = 1664525u * s_build_rng + 1013904223u;
+    return (double)(s_build_rng & 0x00ffffffu) / (double)0x01000000u;
+}
+
+static float lerpf(float a, float b, float t)
+{
+    return a + (b - a) * t;
+}
+
+static void random_color_in_range(BuildVisualType type, float out[3])
+{
+    float c0[3], c1[3], c2[3], c3[3];
+    double t = build_rand01();
+    double u = build_rand01();
+    double v = build_rand01();
+    double w = build_rand01();
+
+    switch (type) {
+    case BUILD_VIS_ROCKY:
+        /* basalt grey -> dusty tan -> rusty brown */
+        c0[0] = 0.30f; c0[1] = 0.30f; c0[2] = 0.31f;
+        c1[0] = 0.64f; c1[1] = 0.54f; c1[2] = 0.40f;
+        c2[0] = 0.46f; c2[1] = 0.36f; c2[2] = 0.30f;
+        c3[0] = 0.56f; c3[1] = 0.46f; c3[2] = 0.38f;
+        break;
+    case BUILD_VIS_GAS_GIANT:
+        /* warm ochre -> beige -> muted caramel */
+        c0[0] = 0.54f; c0[1] = 0.40f; c0[2] = 0.24f;
+        c1[0] = 0.92f; c1[1] = 0.84f; c1[2] = 0.66f;
+        c2[0] = 0.72f; c2[1] = 0.56f; c2[2] = 0.34f;
+        c3[0] = 0.84f; c3[1] = 0.70f; c3[2] = 0.48f;
+        break;
+    case BUILD_VIS_ICE_PLANET:
+        /* pale ice blue -> frosted cyan -> blue-white */
+        c0[0] = 0.56f; c0[1] = 0.72f; c0[2] = 0.88f;
+        c1[0] = 0.86f; c1[1] = 0.95f; c1[2] = 1.00f;
+        c2[0] = 0.66f; c2[1] = 0.82f; c2[2] = 0.94f;
+        c3[0] = 0.78f; c3[1] = 0.90f; c3[2] = 0.98f;
+        break;
+    case BUILD_VIS_MOON:
+        /* charcoal grey -> dusty light grey */
+        c0[0] = 0.36f; c0[1] = 0.36f; c0[2] = 0.37f;
+        c1[0] = 0.78f; c1[1] = 0.77f; c1[2] = 0.74f;
+        c2[0] = 0.54f; c2[1] = 0.54f; c2[2] = 0.55f;
+        c3[0] = 0.66f; c3[1] = 0.65f; c3[2] = 0.63f;
+        break;
+    case BUILD_VIS_DWARF_PLANET:
+        /* grey-brown dusty dwarf palette */
+        c0[0] = 0.38f; c0[1] = 0.38f; c0[2] = 0.39f;
+        c1[0] = 0.72f; c1[1] = 0.68f; c1[2] = 0.60f;
+        c2[0] = 0.52f; c2[1] = 0.48f; c2[2] = 0.44f;
+        c3[0] = 0.60f; c3[1] = 0.54f; c3[2] = 0.48f;
+        break;
+    default:
+        out[0] = out[1] = out[2] = 1.0f;
+        return;
+    }
+
+    if (t < 0.33) {
+        out[0] = lerpf(c0[0], c1[0], (float)(u * 0.95));
+        out[1] = lerpf(c0[1], c1[1], (float)(u * 0.95));
+        out[2] = lerpf(c0[2], c1[2], (float)(u * 0.95));
+    } else if (t < 0.66) {
+        out[0] = lerpf(c1[0], c2[0], (float)(u * 0.95));
+        out[1] = lerpf(c1[1], c2[1], (float)(u * 0.95));
+        out[2] = lerpf(c1[2], c2[2], (float)(u * 0.95));
+    } else {
+        out[0] = lerpf(c2[0], c3[0], (float)(u * 0.95));
+        out[1] = lerpf(c2[1], c3[1], (float)(u * 0.95));
+        out[2] = lerpf(c2[2], c3[2], (float)(u * 0.95));
+    }
+
+    out[0] = fminf(1.0f, fmaxf(0.0f, out[0] + (float)(v - 0.5) * 0.10f));
+    out[1] = fminf(1.0f, fmaxf(0.0f, out[1] + (float)(w - 0.5) * 0.08f));
+    out[2] = fminf(1.0f, fmaxf(0.0f, out[2] + (float)(u - 0.5) * 0.08f));
+}
+
+static double random_rotation_period_days(BuildVisualType type)
+{
+    double t = build_rand01();
+    switch (type) {
+    case BUILD_VIS_ROCKY:        return 0.35 + t * 3.4;
+    case BUILD_VIS_GAS_GIANT:    return 0.28 + t * 0.55;
+    case BUILD_VIS_ICE_PLANET:   return 0.45 + t * 1.6;
+    case BUILD_VIS_MOON:         return 0.4  + t * 18.0;
+    case BUILD_VIS_DWARF_PLANET: return 0.25 + t * 5.0;
+    case BUILD_VIS_STAR:         return 18.0 + t * 18.0;
+    default:                     return 1.0;
+    }
+}
+
+static double random_obliquity_deg(BuildVisualType type)
+{
+    double t = build_rand01();
+    switch (type) {
+    case BUILD_VIS_GAS_GIANT:    return t * 32.0;
+    case BUILD_VIS_ICE_PLANET:   return t * 98.0;
+    case BUILD_VIS_MOON:         return t * 18.0;
+    case BUILD_VIS_DWARF_PLANET: return t * 55.0;
+    case BUILD_VIS_ROCKY:        return t * 45.0;
+    case BUILD_VIS_STAR:         return 7.25;
+    default:                     return 0.0;
+    }
+}
+
+static double random_rotation_rate(BuildVisualType type)
+{
+    double period_days = random_rotation_period_days(type);
+    double sign = build_rand01() < 0.5 ? -1.0 : 1.0;
+    if (type == BUILD_VIS_STAR) sign = 1.0;
+    return sign * (2.0 * PI) / (period_days * DAY);
+}
 
 void build_init(void)
 {
     s_selected = 0;
+    s_build_rng = 0x51f15eedu;
 }
 
 int build_preset_count(void)
@@ -363,14 +480,17 @@ int build_place_current(void)
     spec.mass = p->mass;
     spec.radius = p->radius;
     build_preview_pos_m(spec.pos);
-    spec.col[0] = p->col[0];
-    spec.col[1] = p->col[1];
-    spec.col[2] = p->col[2];
+    if (p->visual_type == BUILD_VIS_STAR) {
+        spec.col[0] = p->col[0];
+        spec.col[1] = p->col[1];
+        spec.col[2] = p->col[2];
+    } else {
+        random_color_in_range(p->visual_type, spec.col);
+    }
     spec.is_star = p->is_star;
     spec.parent = -1;
-    spec.obliquity = p->is_star ? 7.25 : 23.4;
-    spec.rotation_rate = p->is_star ? (2.0 * PI) / (25.0 * DAY)
-                                    : (2.0 * PI) / DAY;
+    spec.obliquity = random_obliquity_deg(p->visual_type);
+    spec.rotation_rate = random_rotation_rate(p->visual_type);
     spec.atm_color[0] = p->atm_color[0];
     spec.atm_color[1] = p->atm_color[1];
     spec.atm_color[2] = p->atm_color[2];

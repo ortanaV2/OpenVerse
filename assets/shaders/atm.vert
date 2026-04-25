@@ -2,9 +2,8 @@
 /*
  * atm.vert — atmospheric glow billboard
  *
- * Sizes the quad to the outer atmosphere radius (planet_r × scale).
- * v_uv ∈ [−1, +1] maps to the outer atmosphere edge, used in atm.frag
- * only for the fast corner-discard (billboard is square, glow is circular).
+ * Sizes the quad to an oversized outer-atmosphere billboard so off-axis
+ * planets do not have their atmosphere clipped by the quad bounds.
  */
 
 layout(location = 0) in vec2 a_uv;
@@ -15,13 +14,12 @@ uniform float u_radius;      /* outer atmosphere radius (AU)  */
 uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
 
-out vec2 v_uv;
+const float BILL_SCALE = 2.0;
 
 void main() {
     vec2 off    = a_uv * 2.0 - 1.0;          /* −1 .. +1 */
     vec3 pos    = u_center
-                + u_cam_right * (off.x * u_radius)
-                + u_cam_up    * (off.y * u_radius);
-    v_uv        = off;
+                + u_cam_right * (off.x * u_radius * BILL_SCALE)
+                + u_cam_up    * (off.y * u_radius * BILL_SCALE);
     gl_Position = u_vp * vec4(pos, 1.0);
 }

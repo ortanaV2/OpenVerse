@@ -17,6 +17,9 @@
  *   7  Io              (yellow-orange with dark volcanic spots)
  *   8  Titan           (orange haze)
  *   9  Europa          (icy white with rust cracks)
+ *   10 build rocky     (grey-brown terrestrial)
+ *   11 build gas giant (soft cloudy beige-brown giant)
+ *   12 build ice       (icy blue giant)
  */
 
 in vec2 v_uv;   /* unused for planets, kept for linker compatibility */
@@ -159,6 +162,43 @@ vec3 surface_color(vec3 NL) {
     if (u_planet_type == 6) {
         float band = sin(NL.y * 5.0 + (n - 0.5)) * 0.07 + 0.93;
         return u_color * (0.72 + 0.56 * n) * band;
+    }
+
+    /* ---- Build Rocky Planet ------------------------------------------- */
+    if (u_planet_type == 10) {
+        float n2 = fbm(NL * 6.2 + vec3(3.2, 5.4, 1.7));
+        vec3 dark = u_color * vec3(0.62, 0.60, 0.58);
+        vec3 mid  = u_color * vec3(0.95, 0.92, 0.88);
+        vec3 bright = u_color * vec3(1.18, 1.12, 1.04);
+        vec3 col = mix(dark, mid, n * 0.75 + n2 * 0.25);
+        col = mix(col, bright, smoothstep(0.70, 0.90, n2) * 0.35);
+        return col;
+    }
+
+    /* ---- Build Gas Giant ---------------------------------------------- */
+    if (u_planet_type == 11) {
+        float n2 = fbm(NL * 3.2 + vec3(4.4, 1.6, 7.2));
+        float n3 = fbm(NL * 6.8 + vec3(1.8, 6.2, 2.7));
+        float cloud = sin(NL.y * 11.5 + (n - 0.5) * 1.8 + (n2 - 0.5) * 1.0) * 0.5 + 0.5;
+        float haze  = sin(NL.y * 5.2 + (n3 - 0.5) * 1.4) * 0.5 + 0.5;
+        vec3 deep = u_color * vec3(0.78, 0.64, 0.48);
+        vec3 light = u_color * vec3(1.12, 1.04, 0.92);
+        vec3 warm = u_color * vec3(0.96, 0.80, 0.60);
+        vec3 col = mix(deep, light, cloud * 0.46 + haze * 0.22 + n * 0.18);
+        col = mix(col, warm, smoothstep(0.70, 0.90, n3) * 0.18);
+        return col;
+    }
+
+    /* ---- Build Ice Planet --------------------------------------------- */
+    if (u_planet_type == 12) {
+        float n2 = fbm(NL * 5.5 + vec3(2.6, 7.4, 1.3));
+        float bands = sin(NL.y * 8.0 + (n2 - 0.5) * 2.8) * 0.5 + 0.5;
+        vec3 deep = u_color * vec3(0.72, 0.88, 1.05);
+        vec3 light = u_color * vec3(1.04, 1.08, 1.10);
+        vec3 frost = vec3(0.92, 0.97, 1.0);
+        vec3 col = mix(deep, light, n * 0.45 + bands * 0.35);
+        col = mix(col, frost, smoothstep(0.78, 0.92, n2) * 0.26);
+        return col;
     }
 
     /* ---- Io ----------------------------------------------------------- */

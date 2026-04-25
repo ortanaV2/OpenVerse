@@ -21,8 +21,6 @@
  * gl_FragDepth keeps it correctly depth-sorted against opaque geometry.
  */
 
-in vec2 v_uv;            /* [−1, +1] → outer atmosphere edge  */
-
 uniform vec3  u_oc;              /* cam − centre  (camera-relative, AU) */
 uniform float u_planet_radius;   /* inner sphere radius  (AU)           */
 uniform float u_radius;          /* outer atmosphere radius (AU)        */
@@ -40,9 +38,6 @@ uniform float u_atm_intensity;
 out vec4 frag_color;
 
 void main() {
-    /* Fast discard: billboard is square, glow disc is circular */
-    if (dot(v_uv, v_uv) > 1.0) discard;
-
     /* Per-pixel ray direction — identical formula to phong.frag */
     vec2 ndc     = (gl_FragCoord.xy / (u_screen * 0.5)) - 1.0;
     vec3 ray_dir = normalize(u_cam_fwd

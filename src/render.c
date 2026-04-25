@@ -69,6 +69,11 @@ static int get_planet_type(const char *name)
         { "Europa",  9 }, { NULL,      0 }
     };
     int k;
+    if (!name) return 0;
+    if (strncmp(name, "Rocky Planet", 12) == 0) return 10;
+    if (strncmp(name, "Gas Giant", 9) == 0) return 11;
+    if (strncmp(name, "Ice Planet", 10) == 0) return 12;
+    if (strncmp(name, "Dwarf Planet", 12) == 0) return 0;
     for (k = 0; tbl[k].name; k++)
         if (strcmp(name, tbl[k].name) == 0) return tbl[k].ptype;
     return 0;   /* rocky / default for everything else */

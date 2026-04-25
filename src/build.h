@@ -4,11 +4,21 @@
 #pragma once
 #include "common.h"
 
+typedef enum {
+    BUILD_VIS_ROCKY = 0,
+    BUILD_VIS_GAS_GIANT,
+    BUILD_VIS_ICE_PLANET,
+    BUILD_VIS_MOON,
+    BUILD_VIS_DWARF_PLANET,
+    BUILD_VIS_STAR
+} BuildVisualType;
+
 typedef struct {
     const char *name;
     double mass;
     double radius;
     float  col[3];
+    BuildVisualType visual_type;
     int    is_star;
     int    wants_planet_parent;
     int    wants_nonstar_parent;
