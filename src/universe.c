@@ -66,6 +66,7 @@ static void alloc_trail(Body *bo)
     bo->trail_head  = 0;
     bo->trail_count = 0;
     bo->trail_accum = 0.0;
+    bo->trail_fade  = 1.0;
 }
 
 static int find_body_index(const char *name, int n)

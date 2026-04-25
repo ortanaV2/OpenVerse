@@ -38,6 +38,7 @@ typedef struct {
     int    trail_head;       /* index of next write slot                   */
     int    trail_count;      /* number of valid samples (0..TRAIL_LEN)     */
     double (*trail)[3];      /* heap-allocated [TRAIL_LEN][3]              */
+    double trail_fade;       /* 1.0 = full alpha; fades to 0 after death   */
 } Body;
 
 /* g_bodies is a heap-allocated array that grows via realloc.

@@ -191,7 +191,8 @@ void trails_render(const float vp[16])
 
     for (int i = 0; i < g_nbodies && i < s_n; i++) {
         Body *b = &g_bodies[i];
-        if (!b->alive || b->is_star || b->trail_count < 2 || !b->trail) continue;
+        if (b->is_star || b->trail_count < 2 || !b->trail) continue;
+        if (!b->alive && b->trail_fade <= 0.0) continue;
 
         const int head  = b->trail_head;
         const int count = b->trail_count;
@@ -218,19 +219,25 @@ void trails_render(const float vp[16])
             s_last_count[i] = count;
         }
 
-        /* Always write the current live position as the final vertex so the
-         * trail tip follows the planet every frame even without a new sample.
-         * Camera-relative, same double-precision subtraction as above. */
-        float live[3] = {
-            (float)(b->pos[0] * RS - g_cam.pos[0]),
-            (float)(b->pos[1] * RS - g_cam.pos[1]),
-            (float)(b->pos[2] * RS - g_cam.pos[2])
-        };
-        glBufferSubData(GL_ARRAY_BUFFER,
-                        count * 3 * sizeof(float), sizeof(live), live);
+        int draw_count;
+        if (b->alive && b->trail_interval > 0.0) {
+            /* Append the live planet position as the final vertex so the
+             * trail tip follows the planet every frame without a new sample.
+             * Camera-relative, double-precision subtraction as above. */
+            float live[3] = {
+                (float)(b->pos[0] * RS - g_cam.pos[0]),
+                (float)(b->pos[1] * RS - g_cam.pos[1]),
+                (float)(b->pos[2] * RS - g_cam.pos[2])
+            };
+            glBufferSubData(GL_ARRAY_BUFFER,
+                            count * 3 * sizeof(float), sizeof(live), live);
+            draw_count = count + 1;
+        } else {
+            draw_count = count;
+        }
 
-        int draw_count = count + 1;
-        glUniform4f(s_loc_color, b->col[0], b->col[1], b->col[2], 0.6f * trail_fade);
+        float alpha = 0.6f * (float)b->trail_fade * trail_fade;
+        glUniform4f(s_loc_color, b->col[0], b->col[1], b->col[2], alpha);
         glUniform1i(s_loc_count, draw_count);
         glDrawArrays(GL_LINE_STRIP, 0, draw_count);
     }

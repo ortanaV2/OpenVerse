@@ -4,6 +4,16 @@
  * Keeps body indices stable by marking absorbed bodies as !alive. The visual
  * side is deliberately lightweight: an impact creates a local hot spot that
  * the planet shader fades over time.
+ *
+ * Sections (search "§"):
+ *   § STATE     — constants, structs, static arrays, housekeeping
+ *   § MATH      — geometry helpers, body surface transforms, spin physics
+ *   § CURVES    — easing, heat/spread curves, visual radius helpers
+ *   § PARTICLES — intersection ring geometry, particle spawning
+ *   § SCARS     — radius transitions, impact events, permanent craters
+ *   § MERGE     — merge lifecycle: begin → update → finalize
+ *   § DETECT    — classification, swept-sphere, broadphase loop
+ *   § API       — public query functions
  */
 #include "collision.h"
 #include "body.h"
@@ -13,7 +23,10 @@
 #include <math.h>
 #include <stdio.h>
 
+/* ── § STATE — constants, structs, static arrays, housekeeping ───────── */
+
 #define MAX_IMPACTS 64
+#define TRAIL_FADE_DURATION (DAY * 60.0)
 #define MAX_PAIR_DT (DAY * 2.0)
 #define MIN_PAIR_DT (60.0 * 5.0)
 #define HOT_PAIR_DT (60.0 * 10.0)
@@ -128,6 +141,8 @@ void collision_on_body_added(int body_idx)
     int root = body_root_star(body_idx);
     if (root >= 0) mark_system_dirty(root, SYSTEM_HOT_DURATION);
 }
+
+/* ── § MATH — geometry helpers, body surface transforms, spin physics ── */
 
 static int body_is_descendant_of(int body_idx, int ancestor_idx)
 {
@@ -408,6 +423,8 @@ static void compute_collision_spin_state(int target, int impactor,
         *out_rotation_rate = (L_total[0] * merged_axis[0] + L_total[1] * merged_axis[1]) / fmax(merged_I, 1e-12);
 }
 
+/* ── § CURVES — easing, heat/spread curves, visual radius helpers ─────── */
+
 static double ease_out_cubic(double t)
 {
     double inv;
@@ -497,6 +514,8 @@ static double current_contact_radius(int body_idx)
     if (body_idx < 0 || body_idx >= g_nbodies) return 0.0;
     return current_visual_radius(body_idx, g_bodies[body_idx].radius);
 }
+
+/* ── § PARTICLES — intersection ring geometry, particle spawning ─────── */
 
 static int current_merge_intersection_ring(int body_idx, const double fallback_dir[3],
                                            double out_center[3], double out_normal[3],
@@ -732,6 +751,8 @@ static void spawn_impact_particles(int body_idx, int kind, const double world_di
     }
 }
 
+/* ── § SCARS — radius transitions, impact events, permanent craters ───── */
+
 static void finish_radius_transition(int body_idx)
 {
     RadiusTransition *fx;
@@ -868,6 +889,8 @@ static void add_permanent_crater(int body_idx, const double world_dir[3],
     s->seed = rand01f() * 100.0f;
 }
 
+/* ── § MERGE — merge lifecycle: begin → update → finalize ────────────── */
+
 static double trail_interval_for_body_after_merge(int body_idx)
 {
     Body *b;
@@ -939,14 +962,18 @@ static void finalize_absorb_body(int target, int impactor, double rel_speed,
     }
 
     rings_on_body_absorbed(target, impactor);
+    if (b->trail && b->trail_count > 0) {
+        b->trail[b->trail_head][0] = b->pos[0] * RS;
+        b->trail[b->trail_head][1] = b->pos[1] * RS;
+        b->trail[b->trail_head][2] = b->pos[2] * RS;
+        b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
+        if (b->trail_count < TRAIL_LEN) b->trail_count++;
+    }
     b->alive = 0;
     b->mass = 0.0;
-    b->trail_count = 0;
     a->trail_interval = trail_interval_for_body_after_merge(target);
-    trails_reset_body(target);
     labels_add_body(target);
     labels_remove_body(impactor);
-    trails_remove_body(impactor);
     mark_system_dirty(body_root_star(target), SYSTEM_HOT_DURATION);
     fprintf(stderr, "[collision] %s absorbed %s (%.0f m/s, %s, %.0f->%.0f km)\n",
             a->name, b->name, rel_speed,
@@ -1200,6 +1227,16 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     }
     if (slot < 0) slot = 0;
 
+    if (b->trail && b->trail_count > 0) {
+        b->trail[b->trail_head][0] = b->pos[0] * RS;
+        b->trail[b->trail_head][1] = b->pos[1] * RS;
+        b->trail[b->trail_head][2] = b->pos[2] * RS;
+        b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
+        if (b->trail_count < TRAIL_LEN) b->trail_count++;
+    }
+    b->trail_interval = 0.0;
+
+
     if (total <= 0.0) return;
 
     a->vel[0] = (a->vel[0] * a->mass + b->vel[0] * b->mass) / total;
@@ -1340,6 +1377,8 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     spawn_impact_particles(target, COLLISION_VIS_MERGE, dir, s_merges[slot].rel_vel,
                            b->radius, rel_speed, 0.85);
 }
+
+/* ── § DETECT — classification, swept-sphere, broadphase loop ────────── */
 
 static int classify_collision(int a, int b, double rel_speed)
 {
@@ -1612,6 +1651,16 @@ void collision_step(double dt)
 
     if (dt <= 0.0) return;
 
+    for (int i = 0; i < g_nbodies; i++) {
+        Body *b = &g_bodies[i];
+        if (b->alive || !b->trail || b->trail_count < 1 || b->trail_fade <= 0.0) continue;
+        b->trail_fade -= dt / TRAIL_FADE_DURATION;
+        if (b->trail_fade <= 0.0) {
+            b->trail_fade = 0.0;
+            b->trail_count = 0;
+        }
+    }
+
     for (int i = 0; i < MAX_BODIES; i++) {
         if (s_system_dirty[i]) { any_dirty = 1; break; }
     }
@@ -1734,6 +1783,8 @@ void collision_step(double dt)
         }
     }
 }
+
+/* ── § API — public query functions ──────────────────────────────────── */
 
 int collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPOTS])
 {
