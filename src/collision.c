@@ -56,11 +56,13 @@ typedef struct {
     double rel_speed;
     double dir[3];
     double rel_vel[3];
+    double target_local_attach_dir[3];
     double start_sep;
     double particle_emit_accum;
     double particle_emit_next;
-    double target_rotation_rate;   /* saved initial rates so both can slow together */
+    double target_rotation_rate;
     double impactor_rotation_rate;
+    double target_obliquity;
     int scar_slot;          /* s_impacts index for the target intersection scar */
     int imp_scar_slot;      /* s_impacts index for the impactor intersection scar */
 } MergeEvent;
@@ -207,6 +209,132 @@ static void normalize3d(double v[3])
         return;
     }
     v[0] /= len; v[1] /= len; v[2] /= len;
+}
+
+static void body_local_surface_dir_to_world(int body_idx, const double local_dir[3],
+                                            double out[3])
+{
+    Body *b;
+    double cr, sr, co, so;
+    double tx, ty, tz;
+    double len;
+
+    if (!out || body_idx < 0 || body_idx >= g_nbodies) return;
+    b = &g_bodies[body_idx];
+
+    cr = cos(b->rotation_angle);
+    sr = sin(b->rotation_angle);
+    tx = local_dir[0] * cr - local_dir[2] * sr;
+    ty = local_dir[1];
+    tz = local_dir[0] * sr + local_dir[2] * cr;
+
+    co = cos(b->obliquity * PI / 180.0);
+    so = sin(b->obliquity * PI / 180.0);
+    out[0] =  co * tx + so * ty;
+    out[1] = -so * tx + co * ty;
+    out[2] =  tz;
+
+    len = sqrt(dot3d(out, out));
+    if (len <= 1e-12) {
+        out[0] = 1.0; out[1] = 0.0; out[2] = 0.0;
+        return;
+    }
+    out[0] /= len; out[1] /= len; out[2] /= len;
+}
+
+static double body_moment_of_inertia(const Body *b)
+{
+    if (!b) return 0.0;
+    return 0.40 * b->mass * b->radius * b->radius;
+}
+
+static void spin_axis_from_obliquity(double obliquity_deg, double axis[3])
+{
+    double ob = obliquity_deg * (PI / 180.0);
+    axis[0] = sin(ob);
+    axis[1] = cos(ob);
+    axis[2] = 0.0;
+}
+
+static double obliquity_from_spin_axis(const double axis[3])
+{
+    return atan2(axis[0], axis[1]) * (180.0 / PI);
+}
+
+static double wrap_angle_pm_pi(double a)
+{
+    while (a > PI) a -= 2.0 * PI;
+    while (a < -PI) a += 2.0 * PI;
+    return a;
+}
+
+static void compute_collision_spin_state(int target, int impactor,
+                                         const double contact_dir[3],
+                                         const double rel_vel[3],
+                                         double *out_obliquity,
+                                         double *out_rotation_rate)
+{
+    const Body *a = &g_bodies[target];
+    const Body *b = &g_bodies[impactor];
+    double axis_a[3], axis_b[3], merged_axis[3];
+    double L_spin_a[3], L_spin_b[3], L_orbit[3], L_total[3];
+    double contact_r[3], merged_I, planar_len;
+
+    spin_axis_from_obliquity(a->obliquity, axis_a);
+    spin_axis_from_obliquity(b->obliquity, axis_b);
+
+    {
+        double Ia = body_moment_of_inertia(a);
+        double Ib = body_moment_of_inertia(b);
+        L_spin_a[0] = axis_a[0] * Ia * a->rotation_rate;
+        L_spin_a[1] = axis_a[1] * Ia * a->rotation_rate;
+        L_spin_a[2] = axis_a[2] * Ia * a->rotation_rate;
+        L_spin_b[0] = axis_b[0] * Ib * b->rotation_rate;
+        L_spin_b[1] = axis_b[1] * Ib * b->rotation_rate;
+        L_spin_b[2] = axis_b[2] * Ib * b->rotation_rate;
+    }
+
+    contact_r[0] = contact_dir[0] * a->radius;
+    contact_r[1] = contact_dir[1] * a->radius;
+    contact_r[2] = contact_dir[2] * a->radius;
+
+    L_orbit[0] = b->mass * (contact_r[1] * rel_vel[2] - contact_r[2] * rel_vel[1]);
+    L_orbit[1] = b->mass * (contact_r[2] * rel_vel[0] - contact_r[0] * rel_vel[2]);
+    L_orbit[2] = b->mass * (contact_r[0] * rel_vel[1] - contact_r[1] * rel_vel[0]);
+
+    L_total[0] = L_spin_a[0] + L_spin_b[0] + L_orbit[0];
+    L_total[1] = L_spin_a[1] + L_spin_b[1] + L_orbit[1];
+    L_total[2] = L_spin_a[2] + L_spin_b[2] + L_orbit[2];
+
+    planar_len = sqrt(L_total[0]*L_total[0] + L_total[1]*L_total[1]);
+    if (planar_len <= 1e-12) {
+        merged_axis[0] = axis_a[0];
+        merged_axis[1] = axis_a[1];
+        merged_axis[2] = 0.0;
+        planar_len = sqrt(merged_axis[0]*merged_axis[0] + merged_axis[1]*merged_axis[1]);
+        if (planar_len <= 1e-12) {
+            merged_axis[0] = 0.0;
+            merged_axis[1] = 1.0;
+        } else {
+            merged_axis[0] /= planar_len;
+            merged_axis[1] /= planar_len;
+        }
+        L_total[0] = merged_axis[0] * body_moment_of_inertia(a) * a->rotation_rate;
+        L_total[1] = merged_axis[1] * body_moment_of_inertia(a) * a->rotation_rate;
+    } else {
+        merged_axis[0] = L_total[0] / planar_len;
+        merged_axis[1] = L_total[1] / planar_len;
+        merged_axis[2] = 0.0;
+    }
+
+    merged_I = 0.40 * (a->mass + b->mass)
+             * pow(cbrt(a->radius*a->radius*a->radius + b->radius*b->radius*b->radius), 2.0);
+    if (merged_I <= 1e-12) merged_I = body_moment_of_inertia(a);
+
+    if (out_obliquity)
+        *out_obliquity = obliquity_from_spin_axis(merged_axis);
+    if (out_rotation_rate)
+        *out_rotation_rate = (L_total[0] * merged_axis[0] + L_total[1] * merged_axis[1]) / fmax(merged_I, 1e-12);
 }
 
 static double ease_out_cubic(double t)
@@ -715,6 +843,7 @@ static void update_merge_events(double dt)
         Body *target, *impactor;
         double t, overlap_sep;
         double speed_boost;
+        double attach_world_dir[3];
 
         if (!m->active) continue;
         if (m->target < 0 || m->target >= g_nbodies ||
@@ -735,6 +864,8 @@ static void update_merge_events(double dt)
         if (t > 1.0) t = 1.0;
         speed_boost = merge_speed_boost(m->rel_speed);
         m->particle_emit_accum += dt;
+        body_local_surface_dir_to_world(m->target, m->target_local_attach_dir,
+                                        attach_world_dir);
 
         /* Lock impactor velocity to target. */
         impactor->vel[0] = target->vel[0];
@@ -746,7 +877,8 @@ static void update_merge_events(double dt)
         {
             double spin_window = 0.07 - 0.02 * fmin(speed_boost, 1.0);
             double slow = 1.0 - ease_out_cubic(fmin(1.0, t / spin_window));
-            target->rotation_rate   = m->target_rotation_rate   * slow;
+            target->obliquity = m->target_obliquity;
+            target->rotation_rate = m->target_rotation_rate;
             impactor->rotation_rate = m->impactor_rotation_rate * slow;
         }
 
@@ -773,9 +905,9 @@ static void update_merge_events(double dt)
             /* Despawn the impactor the moment it is fully inside the target. */
             if (overlap_sep + impactor_r <= target_contact_r) {
                 double old_radius = target->radius;
-                impactor->pos[0] = target->pos[0] + m->dir[0] * overlap_sep;
-                impactor->pos[1] = target->pos[1] + m->dir[1] * overlap_sep;
-                impactor->pos[2] = target->pos[2] + m->dir[2] * overlap_sep;
+                impactor->pos[0] = target->pos[0] + attach_world_dir[0] * overlap_sep;
+                impactor->pos[1] = target->pos[1] + attach_world_dir[1] * overlap_sep;
+                impactor->pos[2] = target->pos[2] + attach_world_dir[2] * overlap_sep;
                 /* Do not finish_radius_transition here — let it run to anim_dur
                  * so the target grows smoothly to its final size. */
                 if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
@@ -802,9 +934,9 @@ static void update_merge_events(double dt)
                 continue;
             }
         }
-        impactor->pos[0] = target->pos[0] + m->dir[0] * overlap_sep;
-        impactor->pos[1] = target->pos[1] + m->dir[1] * overlap_sep;
-        impactor->pos[2] = target->pos[2] + m->dir[2] * overlap_sep;
+        impactor->pos[0] = target->pos[0] + attach_world_dir[0] * overlap_sep;
+        impactor->pos[1] = target->pos[1] + attach_world_dir[1] * overlap_sep;
+        impactor->pos[2] = target->pos[2] + attach_world_dir[2] * overlap_sep;
 
         if (t < 0.04) {
             double emit_t = t / 0.04;
@@ -821,7 +953,7 @@ static void update_merge_events(double dt)
                                       * emit_decay * emit_decay * emit_decay
                                       * emit_decay * emit_decay;
                     if (pack_scale < 0.020) pack_scale = 0.020;
-                spawn_impact_particles(m->target, COLLISION_VIS_MERGE, m->dir,
+                spawn_impact_particles(m->target, COLLISION_VIS_MERGE, attach_world_dir,
                                        m->rel_vel, g_bodies[m->impactor].radius,
                                        m->rel_speed, pack_scale);
                 }
@@ -844,16 +976,13 @@ static void update_merge_events(double dt)
                 if (cos_a >  1.0) cos_a =  1.0;
                 float cap = (float)acos(cos_a);
                 if (cap > scar->radius0) {
-                    float local_dir[3];
                     float boost = (float)(0.06 + 0.12 * fmin(speed_boost, 1.2));
                     scar->radius0 = cap;
                     scar->radius1 = fminf((float)(PI * 0.88),
                                           fmaxf(scar->radius1, cap * (1.08f + boost)));
-                    body_world_to_local_surface_dir(m->target, m->dir, local_dir);
-                    normalize3f(local_dir);
-                    scar->dir[0] = local_dir[0];
-                    scar->dir[1] = local_dir[1];
-                    scar->dir[2] = local_dir[2];
+                    scar->dir[0] = (float)m->target_local_attach_dir[0];
+                    scar->dir[1] = (float)m->target_local_attach_dir[1];
+                    scar->dir[2] = (float)m->target_local_attach_dir[2];
                 }
             }
             scar->age = 0.0; /* frozen at full heat until merge ends */
@@ -873,7 +1002,7 @@ static void update_merge_events(double dt)
                 float cap = (float)acos(cos_a);
                 if (cap > scar->radius0) {
                     float local_dir[3];
-                    double neg_dir[3] = {-m->dir[0], -m->dir[1], -m->dir[2]};
+                    double neg_dir[3] = {-attach_world_dir[0], -attach_world_dir[1], -attach_world_dir[2]};
                     float boost = (float)(0.05 + 0.10 * fmin(speed_boost, 1.2));
                     scar->radius0 = cap;
                     scar->radius1 = fminf((float)(PI * 0.88),
@@ -933,6 +1062,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     Body *b = &g_bodies[impactor];
     double total = a->mass + b->mass;
     double merged_radius;
+    float local_dir[3];
 
     for (int i = 0; i < MAX_MERGES; i++) {
         if (!s_merges[i].active) { slot = i; break; }
@@ -954,6 +1084,8 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     b->vel[0] = a->vel[0];
     b->vel[1] = a->vel[1];
     b->vel[2] = a->vel[2];
+    compute_collision_spin_state(target, impactor, dir, rel_vel,
+                                 &a->obliquity, &a->rotation_rate);
 
     s_merges[slot].active    = 1;
     s_merges[slot].target    = target;
@@ -966,13 +1098,15 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     s_merges[slot].rel_vel[0] = rel_vel[0];
     s_merges[slot].rel_vel[1] = rel_vel[1];
     s_merges[slot].rel_vel[2] = rel_vel[2];
-        s_merges[slot].rel_vel[0] = b->vel[0] - a->vel[0];
-        s_merges[slot].rel_vel[1] = b->vel[1] - a->vel[1];
-        s_merges[slot].rel_vel[2] = b->vel[2] - a->vel[2];
-        s_merges[slot].particle_emit_accum    = 0.0;
-        s_merges[slot].particle_emit_next     = 0.0;
-        s_merges[slot].target_rotation_rate   = a->rotation_rate;
+    body_world_to_local_surface_dir(target, dir, local_dir);
+    s_merges[slot].target_local_attach_dir[0] = local_dir[0];
+    s_merges[slot].target_local_attach_dir[1] = local_dir[1];
+    s_merges[slot].target_local_attach_dir[2] = local_dir[2];
+    s_merges[slot].particle_emit_accum    = 0.0;
+    s_merges[slot].particle_emit_next     = 0.0;
+    s_merges[slot].target_rotation_rate   = a->rotation_rate;
     s_merges[slot].impactor_rotation_rate = b->rotation_rate;
+    s_merges[slot].target_obliquity       = a->obliquity;
     s_merges[slot].scar_slot     = -1;
     s_merges[slot].imp_scar_slot = -1;
 
