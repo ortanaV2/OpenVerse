@@ -14,7 +14,7 @@
 #include <stdio.h>
 
 #define MAX_IMPACTS 64
-#define MAX_PAIR_DT (DAY * 20.0)
+#define MAX_PAIR_DT (DAY * 2.0)
 #define MIN_PAIR_DT (60.0 * 5.0)
 #define HOT_PAIR_DT (60.0 * 10.0)
 #define SYSTEM_HOT_DURATION (DAY * 3.0)
@@ -83,6 +83,10 @@ static double s_pair_next[MAX_BODIES][MAX_BODIES];
 static unsigned char s_system_dirty[MAX_BODIES];
 static double s_system_hot[MAX_BODIES];
 static unsigned int s_particle_rng = 0x1234abcdu;
+static double s_pos_before[MAX_BODIES][3];
+static int s_pos_before_valid = 0;
+static int s_debug_frames = 0;           /* non-zero: enhanced diagnostics active */
+static int s_debug_skip_logged[MAX_BODIES]; /* 1 if "SKIPPED" already printed this window */
 
 static void mark_system_dirty(int root, double hot_duration)
 {
@@ -91,10 +95,27 @@ static void mark_system_dirty(int root, double hot_duration)
     if (hot_duration > s_system_hot[root]) s_system_hot[root] = hot_duration;
 }
 
+void collision_snapshot_positions(void)
+{
+    int n = g_nbodies < MAX_BODIES ? g_nbodies : MAX_BODIES;
+    for (int i = 0; i < n; i++) {
+        s_pos_before[i][0] = g_bodies[i].pos[0];
+        s_pos_before[i][1] = g_bodies[i].pos[1];
+        s_pos_before[i][2] = g_bodies[i].pos[2];
+    }
+    s_pos_before_valid = 1;
+}
+
 void collision_on_body_added(int body_idx)
 {
     int root = body_root_star(body_idx);
     if (root >= 0) mark_system_dirty(root, SYSTEM_HOT_DURATION);
+    s_debug_frames = 300;
+    memset(s_debug_skip_logged, 0, sizeof(s_debug_skip_logged));
+    fprintf(stderr, "[coll-dbg] body added: idx=%d root=%d dirty=%d hot=%.2f days\n",
+            body_idx, root,
+            (root >= 0 && root < MAX_BODIES) ? s_system_dirty[root] : -1,
+            (root >= 0 && root < MAX_BODIES) ? s_system_hot[root] / DAY : 0.0);
 }
 
 static int body_is_descendant_of(int body_idx, int ancestor_idx)
@@ -679,6 +700,19 @@ static void finalize_absorb_body(int target, int impactor, double rel_speed,
     labels_remove_body(impactor);
     trails_remove_body(impactor);
     mark_system_dirty(body_root_star(target), SYSTEM_HOT_DURATION);
+    s_debug_frames = 300;
+    memset(s_debug_skip_logged, 0, sizeof(s_debug_skip_logged));
+    {
+        int root = body_root_star(target);
+        fprintf(stderr, "[coll-dbg] merge done: target=%d root=%d hot=%.2f days | alive bodies:",
+                target, root, s_system_hot[root] / DAY);
+        for (int i = 0; i < g_nbodies; i++) {
+            if (!g_bodies[i].alive) continue;
+            fprintf(stderr, " %d(root=%d,imp=%d)", i,
+                    body_root_star(i), body_is_merge_impactor(i));
+        }
+        fprintf(stderr, "\n");
+    }
     fprintf(stdout, "[collision] %s absorbed %s (%.0f m/s, %s, %.0f->%.0f km)\n",
             a->name, b->name, rel_speed,
             outcome == COLLISION_VIS_MERGE ? "merge" :
@@ -1070,32 +1104,46 @@ static int swept_spheres_collide(int a, int b, double dt, double *out_speed)
         g_bodies[b].pos[1] - g_bodies[a].pos[1],
         g_bodies[b].pos[2] - g_bodies[a].pos[2]
     };
-    double rel_v[3] = {
-        g_bodies[b].vel[0] - g_bodies[a].vel[0],
-        g_bodies[b].vel[1] - g_bodies[a].vel[1],
-        g_bodies[b].vel[2] - g_bodies[a].vel[2]
-    };
-    double rel_p[3] = {
-        rel_now[0] - rel_v[0] * dt,
-        rel_now[1] - rel_v[1] * dt,
-        rel_now[2] - rel_v[2] * dt
-    };
-    double vv = dot3d(rel_v, rel_v);
-    double t = 0.0;
-    if (vv > MIN_COLLISION_SPEED * MIN_COLLISION_SPEED) {
-        t = -dot3d(rel_p, rel_v) / vv;
-        if (t < 0.0) t = 0.0;
-        if (t > dt) t = dt;
+    /* Use actual pre-physics positions when available so that bodies which
+     * tunnel completely through each other in one large timestep are still
+     * detected.  The old formula (rel_now - vel*dt) fails when gravity
+     * reverses the relative velocity mid-step: the reconstructed "past"
+     * position ends up on the wrong side of the target, so the swept path
+     * never crosses the contact sphere. */
+    double rel_p[3];
+    double rel_v[3];
+    double vv;
+    if (s_pos_before_valid && dt > 0.0) {
+        rel_p[0] = s_pos_before[b][0] - s_pos_before[a][0];
+        rel_p[1] = s_pos_before[b][1] - s_pos_before[a][1];
+        rel_p[2] = s_pos_before[b][2] - s_pos_before[a][2];
+        rel_v[0] = (rel_now[0] - rel_p[0]) / dt;
+        rel_v[1] = (rel_now[1] - rel_p[1]) / dt;
+        rel_v[2] = (rel_now[2] - rel_p[2]) / dt;
+    } else {
+        rel_v[0] = g_bodies[b].vel[0] - g_bodies[a].vel[0];
+        rel_v[1] = g_bodies[b].vel[1] - g_bodies[a].vel[1];
+        rel_v[2] = g_bodies[b].vel[2] - g_bodies[a].vel[2];
+        rel_p[0] = rel_now[0] - rel_v[0] * dt;
+        rel_p[1] = rel_now[1] - rel_v[1] * dt;
+        rel_p[2] = rel_now[2] - rel_v[2] * dt;
     }
-
-    double c[3] = {
-        rel_p[0] + rel_v[0] * t,
-        rel_p[1] + rel_v[1] * t,
-        rel_p[2] + rel_v[2] * t
-    };
-    double r = current_contact_radius(a) + current_contact_radius(b);
-    if (out_speed) *out_speed = sqrt(vv);
-    return dot3d(c, c) <= r*r;
+    vv = dot3d(rel_v, rel_v);
+    {
+        double t = 0.0;
+        double c[3];
+        double r = current_contact_radius(a) + current_contact_radius(b);
+        if (vv > MIN_COLLISION_SPEED * MIN_COLLISION_SPEED) {
+            t = -dot3d(rel_p, rel_v) / vv;
+            if (t < 0.0) t = 0.0;
+            if (t > dt) t = dt;
+        }
+        c[0] = rel_p[0] + rel_v[0] * t;
+        c[1] = rel_p[1] + rel_v[1] * t;
+        c[2] = rel_p[2] + rel_v[2] * t;
+        if (out_speed) *out_speed = sqrt(vv);
+        return dot3d(c, c) <= r*r;
+    }
 }
 
 static void impact_dir_for_pair(int target, int impactor, double dt, double out_dir[3])
@@ -1169,6 +1217,8 @@ static void absorb_body(int target, int impactor, double rel_speed, double colli
     outcome = classify_collision(target, impactor, rel_speed);
     impact_dir_for_pair(target, impactor, collision_dt, dir);
     if (outcome == COLLISION_VIS_MERGE) {
+        fprintf(stderr, "[coll-dbg] merge start: target=%d impactor=%d speed=%.3g m/s\n",
+                target, impactor, rel_speed);
         begin_merge_event(target, impactor, rel_speed, dir, rel_vel, old_radius);
         return;
     }
@@ -1245,11 +1295,7 @@ void collision_step(double dt)
     if (dt <= 0.0) return;
 
     for (int i = 0; i < MAX_BODIES; i++) {
-        if (s_system_dirty[i]) any_dirty = 1;
-        if (s_system_hot[i] > 0.0) {
-            s_system_hot[i] -= dt;
-            if (s_system_hot[i] < 0.0) s_system_hot[i] = 0.0;
-        }
+        if (s_system_dirty[i]) { any_dirty = 1; break; }
     }
     if (!any_dirty) return;
 
@@ -1270,6 +1316,8 @@ void collision_step(double dt)
         double d = sqrt(dx*dx + dy*dy + dz*dz) + current_contact_radius(i);
         if (d > system_radius[root]) system_radius[root] = d;
     }
+
+    if (s_debug_frames > 0) s_debug_frames--;
 
     for (int root = 0; root < g_nbodies; root++) {
         if (!s_system_dirty[root]) continue;
@@ -1294,7 +1342,15 @@ void collision_step(double dt)
             nb = member_count[other_root];
             for (int ai = 0; ai < na && !root_had_collision; ai++) {
                 int a = members[root][ai];
-                if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_merge_impactor(a)) continue;
+                if (!g_bodies[a].alive || g_bodies[a].is_star || resolved[a] || body_is_merge_impactor(a)) {
+                    if (s_debug_frames > 0 && g_bodies[a].alive && !g_bodies[a].is_star
+                            && !s_debug_skip_logged[a]) {
+                        fprintf(stderr, "[coll-dbg] body %d first SKIPPED resolved=%d impactor=%d\n",
+                                a, resolved[a], body_is_merge_impactor(a));
+                        s_debug_skip_logged[a] = 1;
+                    }
+                    continue;
+                }
                 for (int bi = 0; bi < nb; bi++) {
                     int b = members[other_root][bi];
                     int lo, hi;
@@ -1314,9 +1370,30 @@ void collision_step(double dt)
                         if (s_pair_next[lo][hi] > 0.0) continue;
                     }
 
-                    if (!swept_spheres_collide(a, b, dt, &speed)) {
-                        s_pair_next[lo][hi] = pair_check_dt(a, b);
-                        continue;
+                    {
+                        int hit = swept_spheres_collide(a, b, dt, &speed);
+                        if (s_debug_frames > 0) {
+                            double dx = g_bodies[b].pos[0] - g_bodies[a].pos[0];
+                            double dy = g_bodies[b].pos[1] - g_bodies[a].pos[1];
+                            double dz = g_bodies[b].pos[2] - g_bodies[a].pos[2];
+                            double dist = sqrt(dx*dx + dy*dy + dz*dz);
+                            double r = current_contact_radius(a) + current_contact_radius(b);
+                            if (hit || dist < r * 20.0)
+                                fprintf(stderr, "[coll-dbg] pair (%d,%d) dist=%.3g r=%.3g hit=%d hot=%.2f\n",
+                                        a, b, dist, r, hit, s_system_hot[root] / DAY);
+                        }
+                        if (!hit) {
+                            double pdt = pair_check_dt(a, b);
+                            s_pair_next[lo][hi] = pdt;
+                            if (!same_root) {
+                                /* Cross-system approaching pair: keep both roots
+                                 * dirty so the pair continues to be evaluated
+                                 * after their individual hot periods expire. */
+                                mark_system_dirty(root, pdt);
+                                mark_system_dirty(other_root, pdt);
+                            }
+                            continue;
+                        }
                     }
 
                     {
@@ -1349,6 +1426,13 @@ void collision_step(double dt)
         }
 
         (void)root_had_collision;
+    }
+
+    for (int i = 0; i < MAX_BODIES; i++) {
+        if (s_system_hot[i] > 0.0) {
+            s_system_hot[i] -= dt;
+            if (s_system_hot[i] < 0.0) s_system_hot[i] = 0.0;
+        }
     }
 }
 

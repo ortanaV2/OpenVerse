@@ -27,6 +27,7 @@ typedef struct {
     float size;            /* per-particle size multiplier */
 } CollisionParticle;
 
+void collision_snapshot_positions(void);
 void collision_step(double dt);
 int  collision_spots_for_body(int body_idx, CollisionSpot spots[COLLISION_MAX_SPOTS]);
 void collision_on_body_added(int body_idx);

@@ -417,6 +417,7 @@ int main(int argc, char **argv) {
                         effective_sim_dt = sys_cap;
                 }
 
+                collision_snapshot_positions();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
 #endif
