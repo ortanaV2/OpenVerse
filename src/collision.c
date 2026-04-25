@@ -73,6 +73,7 @@ typedef struct {
     double vel[3];
     float color[4];
     float size;
+    float fade_start; /* normalized lifetime fraction at which alpha fade begins */
 } ImpactParticleState;
 
 static ImpactEvent s_impacts[MAX_IMPACTS];
@@ -527,7 +528,8 @@ static void spawn_impact_particles(int body_idx, int kind, const double world_di
         p->color[1] = base_g * (0.90f + 0.20f * (float)rand01());
         p->color[2] = base_b * (0.85f + 0.25f * (float)rand01());
         p->color[3] = 1.0f;
-        p->size = 0.5f + 2.5f * (float)rand01();
+        p->size       = (0.5f + 2.5f * (float)rand01()) * (float)size_mix;
+        p->fade_start = (float)(0.78 - 0.38 * (1.0 - size_mix));
     }
 }
 
@@ -591,21 +593,28 @@ static void add_impact(int body_idx, int kind, const double world_dir[3],
     radius_ratio = impactor_radius / fmax(b->radius, 1.0);
 
     if (kind == COLLISION_VIS_CRATER) {
-        e->duration = IMPACT_COOL_SECONDS;
+        /* No upper cap: classification already bounds radius_ratio < ~0.43.
+         * Duration scales with radius0 so small craters fade fast, large ones linger. */
+        e->radius0 = (float)fmax(0.004, radius_ratio * 0.65);
+        e->radius1 = e->radius0 * 1.20f;
+        e->duration = IMPACT_COOL_SECONDS * fmax(0.15, (double)e->radius0 / 0.15);
         e->heat0 = (float)fmin(0.95, 0.22 + rel_speed / 32000.0);
-        e->radius0 = (float)fmax(0.010, fmin(0.070, radius_ratio * 0.70));
-        e->radius1 = (float)fmax(e->radius0 + 0.020f, fmin(0.240, e->radius0 * 2.80f));
     } else if (kind == COLLISION_VIS_MAJOR) {
-        e->duration = MAJOR_COOL_SECONDS;
+        /* Same: no upper cap, duration proportional to radius0. */
+        e->radius0 = (float)fmax(0.018, radius_ratio * 0.90);
+        e->radius1 = e->radius0 * 1.20f;
+        e->duration = MAJOR_COOL_SECONDS * fmax(0.30, (double)e->radius0 / 0.50);
         e->heat0 = (float)fmin(1.0, 0.45 + rel_speed / 22000.0 + mass_ratio * 0.4);
-        e->radius0 = (float)fmax(0.030, fmin(0.140, radius_ratio * 1.05));
-        e->radius1 = (float)fmax(e->radius0 + 0.060f, fmin(0.650, e->radius0 * 3.10f));
     } else {
         e->duration = MERGE_COOL_SECONDS;
         e->heat0 = 1.0f;
         e->radius0 = (float)fmax(0.120, fmin(0.280, 0.12 + mass_ratio * 0.28));
         e->radius1 = (float)fmax(2.30f, fmin(3.20f, 2.30f + mass_ratio * 0.70f));
     }
+    fprintf(stderr, "[impact] kind=%s rr=%.3f r0=%.4f r1=%.4f dur=%.1fd\n",
+            kind == COLLISION_VIS_CRATER ? "crater" :
+            kind == COLLISION_VIS_MAJOR  ? "major"  : "merge",
+            radius_ratio, e->radius0, e->radius1, e->duration / DAY);
     body_world_to_local_surface_dir(body_idx, world_dir, e->dir);
     normalize3f(e->dir);
     spawn_impact_particles(body_idx, kind, world_dir, rel_vel,
@@ -692,7 +701,7 @@ static void finalize_absorb_body(int target, int impactor, double rel_speed,
     labels_remove_body(impactor);
     trails_remove_body(impactor);
     mark_system_dirty(body_root_star(target), SYSTEM_HOT_DURATION);
-    fprintf(stdout, "[collision] %s absorbed %s (%.0f m/s, %s, %.0f->%.0f km)\n",
+    fprintf(stderr, "[collision] %s absorbed %s (%.0f m/s, %s, %.0f->%.0f km)\n",
             a->name, b->name, rel_speed,
             outcome == COLLISION_VIS_MERGE ? "merge" :
             outcome == COLLISION_VIS_MAJOR ? "major" : "crater",
@@ -760,6 +769,38 @@ static void update_merge_events(double dt)
                 pen_t = fast_t * (1.0 - 0.12 * tail_blend) + t * (0.12 * tail_blend);
             }
             overlap_sep = m->start_sep + (final_target_sep - m->start_sep) * pen_t;
+
+            /* Despawn the impactor the moment it is fully inside the target. */
+            if (overlap_sep + impactor_r <= target_contact_r) {
+                double old_radius = target->radius;
+                impactor->pos[0] = target->pos[0] + m->dir[0] * overlap_sep;
+                impactor->pos[1] = target->pos[1] + m->dir[1] * overlap_sep;
+                impactor->pos[2] = target->pos[2] + m->dir[2] * overlap_sep;
+                /* Do not finish_radius_transition here — let it run to anim_dur
+                 * so the target grows smoothly to its final size. */
+                if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
+                    s_impacts[m->scar_slot].active) {
+                    float r0 = s_impacts[m->scar_slot].radius0;
+                    float r1_old = s_impacts[m->scar_slot].radius1;
+                    if (r0 <= 0.01f) {
+                        /* Geometric tracking never ran (sim dt >= anim_dur or tiny impactor).
+                         * Estimate the peak cap angle from the impactor's angular size. */
+                        float ov = (float)impactor_r;
+                        float sv = (float)target_contact_r;
+                        r0 = (float)fmax(0.01, asin(fmin(0.999, ov / fmax(sv, ov))));
+                        s_impacts[m->scar_slot].radius0 = r0;
+                    }
+                    s_impacts[m->scar_slot].radius1 = fminf((float)(PI * 0.88), r0 * 1.20f);
+                    s_impacts[m->scar_slot].duration = MERGE_COOL_SECONDS
+                        * fmax(0.30, (double)r0 / (PI * 0.50));
+                    fprintf(stderr, "[early-despawn] r0=%.4f r1_old=%.4f r1_new=%.4f\n",
+                            r0, r1_old, s_impacts[m->scar_slot].radius1);
+                }
+                m->active = 0;
+                finalize_absorb_body(m->target, m->impactor, m->rel_speed,
+                                     COLLISION_VIS_MERGE, old_radius);
+                continue;
+            }
         }
         impactor->pos[0] = target->pos[0] + m->dir[0] * overlap_sep;
         impactor->pos[1] = target->pos[1] + m->dir[1] * overlap_sep;
@@ -854,14 +895,25 @@ static void update_merge_events(double dt)
                 double old_radius = target->radius;
                 finish_radius_transition(m->target);
 
-                /* Release target scar: set radius1 so it expands outward while cooling. */
+                /* Release target scar: expand 20% beyond the geometric cap reached
+                 * during the merge. Duration scales with scar size so growth speed
+                 * is proportional (smaller merger = faster fade). */
                 if (m->scar_slot >= 0 && m->scar_slot < MAX_IMPACTS &&
-                    s_impacts[m->scar_slot].active && s_impacts[m->scar_slot].radius0 > 0.01f) {
+                    s_impacts[m->scar_slot].active) {
                     float r0 = s_impacts[m->scar_slot].radius0;
-                    float r1 = s_impacts[m->scar_slot].radius1;
-                    if (r1 < r0) r1 = r0;
-                    s_impacts[m->scar_slot].radius1 = fminf((float)(PI * 0.88),
-                                                            fmaxf(r1, r0 * 1.12f));
+                    if (r0 <= 0.01f) {
+                        /* Tracking never ran — estimate from impactor angular size. */
+                        float ov = (float)g_bodies[m->impactor].radius;
+                        float sv = (float)current_contact_radius(m->target);
+                        r0 = (float)fmax(0.01, asin(fmin(0.999, ov / fmax(sv, ov))));
+                        s_impacts[m->scar_slot].radius0 = r0;
+                    }
+                    s_impacts[m->scar_slot].radius1 = fminf((float)(PI * 0.88), r0 * 1.20f);
+                    s_impacts[m->scar_slot].duration = MERGE_COOL_SECONDS
+                        * fmax(0.30, (double)r0 / (PI * 0.50));
+                    fprintf(stderr, "[merge-release] r0=%.4f r1=%.4f dur=%.1fd\n",
+                            r0, s_impacts[m->scar_slot].radius1,
+                            s_impacts[m->scar_slot].duration / DAY);
                 }
 
                 m->active = 0;
@@ -938,7 +990,7 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
         s_merges[slot].duration  = anim_dur;
         s_merges[slot].start_sep = sep_init;
 
-        start_radius_transition(target, old_radius, a->radius, anim_dur * 0.78);
+        start_radius_transition(target, old_radius, a->radius, anim_dur);
         /* Impactor keeps its size throughout — no shrink transition. */
     }
 
@@ -1194,6 +1246,14 @@ static void absorb_body(int target, int impactor, double rel_speed, double colli
     old_radius = current_contact_radius(target);
     mass_ratio = fmin(a->mass, b->mass) / fmax(fmax(a->mass, b->mass), 1.0);
     outcome = classify_collision(target, impactor, rel_speed);
+    {
+        double ra = current_contact_radius(target);
+        double rb = current_contact_radius(impactor);
+        fprintf(stderr, "[absorb] %s <- %s  mr=%.3f rr=%.3f  outcome=%s\n",
+                a->name, b->name, mass_ratio, rb/fmax(ra,1.0),
+                outcome==COLLISION_VIS_MERGE?"MERGE":
+                outcome==COLLISION_VIS_MAJOR?"MAJOR":"CRATER");
+    }
     impact_dir_for_pair(target, impactor, collision_dt, dir);
     if (outcome == COLLISION_VIS_MERGE) {
         begin_merge_event(target, impactor, rel_speed, dir, rel_vel, old_radius);
@@ -1512,7 +1572,7 @@ int collision_particles(CollisionParticle *out, int max_particles,
         if (t < 0.0) t = 0.0;
         if (t > 1.0) t = 1.0;
         fade = 1.0 - t;
-        fade_t = (t - 0.78) / 0.22;
+        fade_t = (t - p->fade_start) / (1.0 - p->fade_start);
         if (fade_t < 0.0) fade_t = 0.0;
         if (fade_t > 1.0) fade_t = 1.0;
         alpha = 1.0 - fade_t * fade_t;
