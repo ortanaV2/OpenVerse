@@ -35,20 +35,21 @@ static double s_last_cam[3] = {0.0, 0.0, 0.0};
 /* Scratch: (TRAIL_LEN samples + live tip) × [x, y, z, arc_from_tip] */
 static float s_scratch[(TRAIL_LEN + 1) * 4];
 
-#define TRAIL_PLANET_LEN_SCALE      (2.0 * PI * 1.02)
-#define TRAIL_FRONT_FADE_PLANET_AU  0.014
-#define TRAIL_FRONT_FADE_MOON_AU    0.026
-#define TRAIL_TAIL_FADE_PLANET_FRAC 0.24
-#define TRAIL_TAIL_FADE_MOON_FRAC   0.52
-#define TRAIL_TAIL_FADE_PLANET_MIN_AU 0.028
-#define TRAIL_TAIL_FADE_MOON_MIN_AU   0.065
-
-#define TRAIL_MOON_FALLBACK_AU   0.60
-#define TRAIL_MOON_BASE_AU       0.48
-#define TRAIL_MOON_REF_DIST_AU   0.00257
-#define TRAIL_MOON_POWER         1.65
-#define TRAIL_MOON_MIN_AU        0.08
-#define TRAIL_MOON_MAX_AU        2.00
+/*
+ * Fixed visible trail lengths in AU, derived from the old T/400 system with
+ * TRAIL_LEN=4096 samples after the 2-year warmup:
+ *   Planets: Earth accumulates ~12.6 AU (2 full orbits); outer planets have
+ *            less due to fewer samples — the target clips inner planets and
+ *            passes outer planets through unchanged.
+ *   Moons:   Fast orbiters fill the buffer (e.g. Luna ~0.17 AU, Callisto
+ *            ~0.81 AU); 0.5 AU covers most without over-clipping.
+ *
+ * Tail fade covers the full visible length (old system faded t² over all
+ * vertices; smoothstep over the full arc gives the same visual result).
+ */
+#define TRAIL_PLANET_AU      24.0f
+#define TRAIL_MOON_AU         0.5f
+#define TRAIL_TAIL_FADE_FRAC  1.0f
 
 static float clampf_local(float x, float lo, float hi)
 {
@@ -57,50 +58,10 @@ static float clampf_local(float x, float lo, float hi)
     return x;
 }
 
-static double trail_parent_dist_au(const Body *b)
-{
-    double dx, dy, dz;
-
-    if (!b || b->parent < 0 || b->parent >= g_nbodies) return -1.0;
-    if (!g_bodies[b->parent].alive) return -1.0;
-
-    dx = b->pos[0] - g_bodies[b->parent].pos[0];
-    dy = b->pos[1] - g_bodies[b->parent].pos[1];
-    dz = b->pos[2] - g_bodies[b->parent].pos[2];
-    return sqrt(dx*dx + dy*dy + dz*dz) * RS;
-}
-
 static float trail_target_length_au(int body_idx)
 {
-    Body *b;
-
     if (body_idx < 0 || body_idx >= g_nbodies) return 0.0f;
-    b = &g_bodies[body_idx];
-
-    if (b->is_moon) {
-        double dist_au = trail_parent_dist_au(b);
-        if (dist_au <= 0.0) return (float)TRAIL_MOON_FALLBACK_AU;
-        {
-            double ratio = dist_au / TRAIL_MOON_REF_DIST_AU;
-            double len = TRAIL_MOON_BASE_AU * pow(ratio, TRAIL_MOON_POWER);
-            if (len < TRAIL_MOON_MIN_AU) len = TRAIL_MOON_MIN_AU;
-            if (len > TRAIL_MOON_MAX_AU) len = TRAIL_MOON_MAX_AU;
-            return (float)len;
-        }
-    }
-
-    {
-        int star = body_root_star(body_idx);
-        if (star >= 0 && star < g_nbodies && star != body_idx) {
-            double dx = b->pos[0] - g_bodies[star].pos[0];
-            double dy = b->pos[1] - g_bodies[star].pos[1];
-            double dz = b->pos[2] - g_bodies[star].pos[2];
-            double r_au = sqrt(dx*dx + dy*dy + dz*dz) * RS;
-            return (float)(TRAIL_PLANET_LEN_SCALE * r_au);
-        }
-    }
-
-    return 0.0f;
+    return g_bodies[body_idx].is_moon ? TRAIL_MOON_AU : TRAIL_PLANET_AU;
 }
 
 static void trail_fade_lengths(int body_idx,
@@ -108,19 +69,9 @@ static void trail_fade_lengths(int body_idx,
                                float *front_fade,
                                float *tail_fade)
 {
-    int is_moon = (body_idx >= 0 && body_idx < g_nbodies && g_bodies[body_idx].is_moon);
-    float front = is_moon ? TRAIL_FRONT_FADE_MOON_AU : TRAIL_FRONT_FADE_PLANET_AU;
-    float tail = visible_len * (is_moon ? TRAIL_TAIL_FADE_MOON_FRAC
-                                        : TRAIL_TAIL_FADE_PLANET_FRAC);
-    float tail_min = is_moon ? TRAIL_TAIL_FADE_MOON_MIN_AU
-                             : TRAIL_TAIL_FADE_PLANET_MIN_AU;
-
-    if (tail < tail_min) tail = tail_min;
-    if (front > visible_len) front = visible_len;
-    if (tail > visible_len) tail = visible_len;
-
-    *front_fade = front;
-    *tail_fade = tail;
+    (void)body_idx;
+    *front_fade = 0.0f;
+    *tail_fade  = visible_len * TRAIL_TAIL_FADE_FRAC;
 }
 
 static void trails_alloc_state(int new_n)
@@ -378,8 +329,15 @@ void trails_render(const float vp[16])
                 glBindVertexArray(s_vao[i]);
                 glBindBuffer(GL_ARRAY_BUFFER, s_vbo[i]);
 
-                if (cam_moved || head != s_last_head[i] || count != s_last_count[i])
+                /* did_upload tracks whether s_scratch is fresh for body i.
+                 * trail_prune_hidden_tail reads s_scratch; only call it when
+                 * we know s_scratch holds this body's arc data, not stale
+                 * data left over from a different body processed earlier. */
+                int did_upload = 0;
+                if (cam_moved || head != s_last_head[i] || count != s_last_count[i]) {
                     trail_upload_body(i);
+                    did_upload = 1;
+                }
 
                 draw_count = count;
                 if (b->alive && b->trail_interval > 0.0) {
@@ -400,13 +358,22 @@ void trails_render(const float vp[16])
                 if (visible_len <= 0.0f) continue;
 
                 trail_fade_lengths(i, visible_len, &front_fade, &tail_fade);
-                if (trail_prune_hidden_tail(i, visible_len)) {
+                if (did_upload && trail_prune_hidden_tail(i, visible_len)) {
                     count = b->trail_count;
                     head = b->trail_head;
                     trail_upload_body(i);
                     draw_count = count;
-                    if (b->alive && b->trail_interval > 0.0)
+                    if (b->alive && b->trail_interval > 0.0) {
+                        float live[4] = {
+                            (float)(b->pos[0] * RS - g_cam.pos[0]),
+                            (float)(b->pos[1] * RS - g_cam.pos[1]),
+                            (float)(b->pos[2] * RS - g_cam.pos[2]),
+                            0.0f
+                        };
+                        glBufferSubData(GL_ARRAY_BUFFER,
+                                        count * 4 * sizeof(float), sizeof(live), live);
                         draw_count = count + 1;
+                    }
                     if (visible_len > s_total_len[i])
                         visible_len = s_total_len[i];
                 }
