@@ -39,6 +39,7 @@ static float s_scratch[(TRAIL_LEN + 1) * 4];
  *
  * Tail fade covers the full visible length (old system faded t² over all
  * vertices; smoothstep over the full arc gives the same visual result). */
+#define TRAIL_SPAWN_FADE_AU  0.012f
 #define TRAIL_TAIL_FADE_FRAC  1.0f
 
 static float clampf_local(float x, float lo, float hi)
@@ -60,7 +61,8 @@ static void trail_fade_lengths(int body_idx,
                                float *tail_fade)
 {
     (void)body_idx;
-    *front_fade = 0.0f;
+    *front_fade = visible_len < TRAIL_SPAWN_FADE_AU ? visible_len
+                                                    : TRAIL_SPAWN_FADE_AU;
     *tail_fade  = visible_len * TRAIL_TAIL_FADE_FRAC;
 }
 
@@ -150,25 +152,23 @@ static float trail_upload_body(int body_idx)
     }
 
     if (count > 0) {
-        float live_x = (float)(b->pos[0] * RS);
-        float live_y = (float)(b->pos[1] * RS);
-        float live_z = (float)(b->pos[2] * RS);
-        float prev_x = live_x;
-        float prev_y = live_y;
-        float prev_z = live_z;
+        /* Use double-precision trail positions for arc calculation.
+         * Re-adding camera-relative float positions loses precision for
+         * very distant systems and makes fade distances unstable. */
+        double prev_x = b->pos[0] * RS;
+        double prev_y = b->pos[1] * RS;
+        double prev_z = b->pos[2] * RS;
 
         for (int k = count - 1; k >= 0; k--) {
-            float px = s_scratch[k*4+0] + (float)g_cam.pos[0];
-            float py = s_scratch[k*4+1] + (float)g_cam.pos[1];
-            float pz = s_scratch[k*4+2] + (float)g_cam.pos[2];
-            float dx = prev_x - px;
-            float dy = prev_y - py;
-            float dz = prev_z - pz;
-            total_len += sqrtf(dx*dx + dy*dy + dz*dz);
+            int idx = (head - count + k + TRAIL_LEN) % TRAIL_LEN;
+            double dx = prev_x - b->trail[idx][0];
+            double dy = prev_y - b->trail[idx][1];
+            double dz = prev_z - b->trail[idx][2];
+            total_len += (float)sqrt(dx*dx + dy*dy + dz*dz);
             s_scratch[k*4+3] = total_len;
-            prev_x = px;
-            prev_y = py;
-            prev_z = pz;
+            prev_x = b->trail[idx][0];
+            prev_y = b->trail[idx][1];
+            prev_z = b->trail[idx][2];
         }
     }
 
@@ -303,13 +303,12 @@ void trails_render(const float vp[16])
 
             for (int i = 0; i < g_nbodies && i < s_n; i++) {
                 Body *b = &g_bodies[i];
-                int head, count, draw_count;
+                int count, draw_count;
                 float visible_len, front_fade, tail_fade;
 
                 if (b->is_star || b->trail_count < 2 || !b->trail) continue;
                 if (!b->alive && b->trail_fade <= 0.0) continue;
 
-                head = b->trail_head;
                 count = b->trail_count;
 
                 glBindVertexArray(s_vao[i]);
@@ -342,7 +341,6 @@ void trails_render(const float vp[16])
                 trail_fade_lengths(i, visible_len, &front_fade, &tail_fade);
                 if (trail_prune_hidden_tail(i, visible_len)) {
                     count = b->trail_count;
-                    head = b->trail_head;
                     trail_upload_body(i);
                     draw_count = count;
                     if (b->alive && b->trail_interval > 0.0) {
