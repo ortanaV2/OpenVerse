@@ -436,14 +436,71 @@ static void sample_body(Body *b) {
     if (b->trail_count < TRAIL_LEN) b->trail_count++;
 }
 
+#define TRAIL_INTERVAL_PER_AU (DAY * 0.50)  /* sim-seconds per AU of nearest relevant body */
+#define TRAIL_MIN_INTERVAL    (60.0 * 30.0) /* 30 sim-minutes at very close approaches */
+#define TRAIL_MAX_INTERVAL    (DAY * 40.0)  /* 40 sim-days for isolated wide orbits */
+
+static int trail_sampling_accepts_neighbor(int body_idx, int neighbor_idx)
+{
+    const Body *self;
+    const Body *other;
+
+    if (body_idx < 0 || body_idx >= g_nbodies ||
+        neighbor_idx < 0 || neighbor_idx >= g_nbodies)
+        return 0;
+
+    self = &g_bodies[body_idx];
+    other = &g_bodies[neighbor_idx];
+
+    if (!other->alive || other->mass <= 0.0) return 0;
+    if (self->is_star) return 0;
+
+    if (self->is_moon || self->is_dwarf) return 1;
+
+    if (other->is_star) return 1;
+    if (other->is_moon || other->is_dwarf) return 0;
+    return 1;
+}
+
+static double trail_compute_interval(int i)
+{
+    const Body *b;
+    double nearest_d2 = 1e300;
+
+    if (i < 0 || i >= g_nbodies) return DAY;
+    b = &g_bodies[i];
+    if (b->is_star) return TRAIL_MAX_INTERVAL;
+
+    for (int j = 0; j < g_nbodies; j++) {
+        double dx, dy, dz, d2;
+
+        if (j == i) continue;
+        if (!trail_sampling_accepts_neighbor(i, j)) continue;
+
+        dx = g_bodies[j].pos[0] - b->pos[0];
+        dy = g_bodies[j].pos[1] - b->pos[1];
+        dz = g_bodies[j].pos[2] - b->pos[2];
+        d2 = dx*dx + dy*dy + dz*dz;
+        if (d2 < nearest_d2) nearest_d2 = d2;
+    }
+
+    if (nearest_d2 >= 1e299) return DAY;
+
+    {
+        double nearest_au = sqrt(nearest_d2) * RS;
+        double interval = nearest_au * TRAIL_INTERVAL_PER_AU;
+        if (interval < TRAIL_MIN_INTERVAL) interval = TRAIL_MIN_INTERVAL;
+        if (interval > TRAIL_MAX_INTERVAL) interval = TRAIL_MAX_INTERVAL;
+        return interval;
+    }
+}
+
 /*
- * trails_tick — time-based trail sampling.
+ * trails_tick — proximity-adaptive trail sampling.
  *
- * Each body accumulates sim-time; once trail_interval is exceeded a sample
- * is recorded.  The while-loop handles multiple samples per tick (fast
- * moons or high sim speeds).  trail_interval ≈ T/200 gives ~200 evenly
- * spaced samples per orbit regardless of sim speed — the trail fills the
- * buffer faster at high speeds, naturally showing more orbital history.
+ * trail_interval is recomputed from the distance to the nearest relevant
+ * body. Planets react to stars/planets only; moons and dwarf planets also
+ * react to nearby moons/dwarfs. Close approach -> denser samples.
  */
 void trails_tick(double dt) {
     trails_tick_system(-1, dt);
@@ -454,6 +511,7 @@ void trails_tick_system(int root, double dt) {
     for (i = 0; i < g_nbodies; i++) {
         Body *b = &g_bodies[i];
         if (!b->alive || !in_system(i, root) || !b->trail || b->trail_interval <= 0.0) continue;
+        b->trail_interval = trail_compute_interval(i);
         b->trail_accum += dt;
         while (b->trail_accum >= b->trail_interval) {
             b->trail_accum -= b->trail_interval;

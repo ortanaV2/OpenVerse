@@ -16,6 +16,8 @@ typedef struct {
     double vel[3];            /* m/s */
     float  col[3];
     int    is_star;
+    int    is_dwarf;
+    int    is_moon;
     int    parent;
     double obliquity;         /* degrees */
     double rotation_rate;     /* rad/s */

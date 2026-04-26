@@ -962,13 +962,6 @@ static void finalize_absorb_body(int target, int impactor, double rel_speed,
     }
 
     rings_on_body_absorbed(target, impactor);
-    if (b->trail && b->trail_count > 0) {
-        b->trail[b->trail_head][0] = b->pos[0] * RS;
-        b->trail[b->trail_head][1] = b->pos[1] * RS;
-        b->trail[b->trail_head][2] = b->pos[2] * RS;
-        b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
-        if (b->trail_count < TRAIL_LEN) b->trail_count++;
-    }
     b->alive = 0;
     b->mass = 0.0;
     a->trail_interval = trail_interval_for_body_after_merge(target);
@@ -1227,14 +1220,8 @@ static void begin_merge_event(int target, int impactor, double rel_speed,
     }
     if (slot < 0) slot = 0;
 
-    if (b->trail && b->trail_count > 0) {
-        b->trail[b->trail_head][0] = b->pos[0] * RS;
-        b->trail[b->trail_head][1] = b->pos[1] * RS;
-        b->trail[b->trail_head][2] = b->pos[2] * RS;
-        b->trail_head = (b->trail_head + 1) % TRAIL_LEN;
-        if (b->trail_count < TRAIL_LEN) b->trail_count++;
-    }
     b->trail_interval = 0.0;
+    b->trail_accum = 0.0;
 
 
     if (total <= 0.0) return;

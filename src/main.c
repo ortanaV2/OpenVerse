@@ -60,6 +60,9 @@ static const double SPEED_TABLE[] = {
 #define SPEED_TABLE_LEN (int)(sizeof(SPEED_TABLE)/sizeof(SPEED_TABLE[0]))
 static int s_speed_idx = 4;   /* start at 1.0 days/s */
 
+#define SIM_REAL_SLICE            (1.0 / 120.0)
+#define MAX_SIM_SLICES_PER_FRAME  6
+
 /* Warp mode (T key) — variable interstellar speed, adjustable via scroll wheel.
  * The speed range shifts from the normal [0.00001, 200] AU/s to the warp
  * range [200, 63241] AU/s (= [0.0032 ly/s, 1 ly/s]).                        */
@@ -341,7 +344,7 @@ int main(int argc, char **argv) {
      * identical resolution to the old 0.02-day loop but ~20× faster
      * because slow forces are only evaluated at the outer (1-day) rate. */
     {
-        const double WARMUP_DT = 365.0 * 2.0 * DAY;
+        const double WARMUP_DT = 365.0 * 3.0 * DAY;
         int sys_n = physics_system_count();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
@@ -358,9 +361,9 @@ int main(int argc, char **argv) {
                 physics_respa_begin_system(root, dt_outer);
                 for (int i = 0; i < n_inner; i++) {
                     physics_respa_inner_system(root, dt_inner);
-                    trails_tick_system(root, dt_inner);
                 }
                 physics_respa_end_system(root, dt_outer);
+                trails_tick_system(root, dt_outer);
             }
         }
         physics_advance_time(WARMUP_DT);
@@ -370,6 +373,7 @@ int main(int argc, char **argv) {
     Uint64 freq    = SDL_GetPerformanceFrequency();
     Uint64 prev    = SDL_GetPerformanceCounter();
     int    running = 1;
+    double sim_real_accum = 0.0;
 
     while (running) {
         /* Delta time */
@@ -403,49 +407,58 @@ int main(int argc, char **argv) {
          * total distance is identical whether we call it N×(dt/N) or 1×dt —
          * this gives ~50× fewer sqrt calls with no change in sample spacing. */
         if (!g_paused && g_sim_speed > 0.0) {
-            const int    MAX_OUTER_STEPS = 120;   /* per system cap */
-            physics_refresh_timestep_model();
-            {
-                int sys_n = physics_system_count();
-                double sim_dt = g_sim_speed * dt;
-                double effective_sim_dt = sim_dt;
+            const int MAX_OUTER_STEPS = 120;   /* per system cap */
 
-                for (int s = 0; s < sys_n; s++) {
-                    double dt_outer_max = physics_system_outer_dt_limit(s);
-                    double sys_cap = dt_outer_max * MAX_OUTER_STEPS;
-                    if (effective_sim_dt > sys_cap)
-                        effective_sim_dt = sys_cap;
-                }
+            sim_real_accum += dt;
+            if (sim_real_accum > SIM_REAL_SLICE * MAX_SIM_SLICES_PER_FRAME)
+                sim_real_accum = SIM_REAL_SLICE * MAX_SIM_SLICES_PER_FRAME;
 
-                collision_snapshot_positions();
+            while (sim_real_accum >= SIM_REAL_SLICE) {
+                physics_refresh_timestep_model();
+                {
+                    int sys_n = physics_system_count();
+                    double sim_dt = g_sim_speed * SIM_REAL_SLICE;
+                    double effective_sim_dt = sim_dt;
+
+                    for (int s = 0; s < sys_n; s++) {
+                        double dt_outer_max = physics_system_outer_dt_limit(s);
+                        double sys_cap = dt_outer_max * MAX_OUTER_STEPS;
+                        if (effective_sim_dt > sys_cap)
+                            effective_sim_dt = sys_cap;
+                    }
+
+                    collision_snapshot_positions();
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
 #endif
-                for (int s = 0; s < sys_n; s++) {
-                    double dt_outer_max = physics_system_outer_dt_limit(s);
-                    double dt_inner_max = physics_system_inner_dt_limit(s);
-                    int root = physics_system_root(s);
-                    double sys_dt = effective_sim_dt;
+                    for (int s = 0; s < sys_n; s++) {
+                        double dt_outer_max = physics_system_outer_dt_limit(s);
+                        double dt_inner_max = physics_system_inner_dt_limit(s);
+                        int root = physics_system_root(s);
+                        double sys_dt = effective_sim_dt;
 
-                    int outer_steps = (int)(sys_dt / dt_outer_max) + 1;
-                    double dt_outer = sys_dt / outer_steps;
-                    int n_inner = (int)(dt_outer / dt_inner_max) + 1;
-                    double dt_inner = dt_outer / n_inner;
+                        int outer_steps = (int)(sys_dt / dt_outer_max) + 1;
+                        double dt_outer = sys_dt / outer_steps;
+                        int n_inner = (int)(dt_outer / dt_inner_max) + 1;
+                        double dt_inner = dt_outer / n_inner;
 
-                    for (int o = 0; o < outer_steps; o++) {
-                        physics_respa_begin_system(root, dt_outer);
-                        for (int i = 0; i < n_inner; i++) {
-                            physics_respa_inner_system(root, dt_inner);
-                            trails_tick_system(root, dt_inner);
+                        for (int o = 0; o < outer_steps; o++) {
+                            physics_respa_begin_system(root, dt_outer);
+                            for (int i = 0; i < n_inner; i++)
+                                physics_respa_inner_system(root, dt_inner);
+                            physics_respa_end_system(root, dt_outer);
+                            trails_tick_system(root, dt_outer);
                         }
-                        physics_respa_end_system(root, dt_outer);
                     }
+                    physics_advance_time(effective_sim_dt);
+                    collision_step(effective_sim_dt);
+                    asteroids_step(effective_sim_dt);
+                    rings_tick(effective_sim_dt);
                 }
-                physics_advance_time(effective_sim_dt);
-                collision_step(effective_sim_dt);
-                asteroids_step(effective_sim_dt);
-                rings_tick(effective_sim_dt);
+                sim_real_accum -= SIM_REAL_SLICE;
             }
+        } else if (g_paused) {
+            sim_real_accum = 0.0;
         }
 
         /* Build matrices */

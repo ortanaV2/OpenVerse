@@ -274,6 +274,7 @@ void universe_load(const char *path)
             bo->pos[0]         = p[0]; bo->pos[1] = p[1]; bo->pos[2] = p[2];
             bo->vel[0]         = v[0]; bo->vel[1] = v[1]; bo->vel[2] = v[2];
             bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
+            bo->is_dwarf       = (strcmp(type, "dwarf_planet") == 0);
             bo->parent         = par_idx;
             bo->trail_interval = trail_int;
             read_rotation(bn, bo);
@@ -351,6 +352,7 @@ void universe_load(const char *path)
             bo->vel[1]         = par_v[1] + rel_v[1];
             bo->vel[2]         = par_v[2] + rel_v[2];
             bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
+            bo->is_moon        = 1;
             bo->parent         = par_idx;
             bo->trail_interval = trail_int;
             read_rotation(bn, bo);
@@ -438,6 +440,8 @@ int universe_add_body(const BodyCreateSpec *spec)
     bo->col[1] = spec->col[1];
     bo->col[2] = spec->col[2];
     bo->is_star = spec->is_star;
+    bo->is_dwarf = spec->is_dwarf;
+    bo->is_moon = spec->is_moon;
     bo->parent = spec->parent;
     bo->obliquity = spec->obliquity;
     bo->rotation_rate = spec->rotation_rate;

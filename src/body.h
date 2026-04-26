@@ -14,6 +14,8 @@ typedef struct {
     double fast_acc[3];    /* m/s^2 dominant parent force, RESPA inner step */
     float  col[3];         /* RGB display colour              */
     int    is_star;
+    int    is_dwarf;
+    int    is_moon;
     int    alive;           /* 0 = removed/absorbed; index kept stable */
     int    parent;         /* index of parent body (-1 = none)                  */
                            /* stars: -1; planets: star idx; moons: planet idx   */
@@ -33,7 +35,7 @@ typedef struct {
     float  atm_scale;       /* outer atm radius as multiple of planet radius */
 
     /* Orbital trail (circular buffer, TRAIL_LEN samples, positions in AU) */
-    double trail_interval;   /* sim-seconds between samples (≈ T/200)     */
+    double trail_interval;   /* sim-seconds between samples               */
     double trail_accum;      /* accumulator toward next sample             */
     int    trail_head;       /* index of next write slot                   */
     int    trail_count;      /* number of valid samples (0..TRAIL_LEN)     */

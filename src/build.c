@@ -488,6 +488,8 @@ int build_place_current(void)
         random_color_in_range(p->visual_type, spec.col);
     }
     spec.is_star = p->is_star;
+    spec.is_dwarf = (p->visual_type == BUILD_VIS_DWARF_PLANET);
+    spec.is_moon = (p->visual_type == BUILD_VIS_MOON);
     spec.parent = -1;
     spec.obliquity = random_obliquity_deg(p->visual_type);
     spec.rotation_rate = random_rotation_rate(p->visual_type);
