@@ -30,25 +30,15 @@ static GLint  s_loc_visible_len  = -1;
 static GLint  s_loc_front_fade   = -1;
 static GLint  s_loc_tail_fade    = -1;
 
-static double s_last_cam[3] = {0.0, 0.0, 0.0};
 
 /* Scratch: (TRAIL_LEN samples + live tip) × [x, y, z, arc_from_tip] */
 static float s_scratch[(TRAIL_LEN + 1) * 4];
 
-/*
- * Fixed visible trail lengths in AU, derived from the old T/400 system with
- * TRAIL_LEN=4096 samples after the 2-year warmup:
- *   Planets: Earth accumulates ~12.6 AU (2 full orbits); outer planets have
- *            less due to fewer samples — the target clips inner planets and
- *            passes outer planets through unchanged.
- *   Moons:   Fast orbiters fill the buffer (e.g. Luna ~0.17 AU, Callisto
- *            ~0.81 AU); 0.5 AU covers most without over-clipping.
+/* TRAIL_PLANET_AU / TRAIL_MOON_AU live in common.h so physics.c can derive
+ * the per-sample minimum-arc gate from the same values.
  *
  * Tail fade covers the full visible length (old system faded t² over all
- * vertices; smoothstep over the full arc gives the same visual result).
- */
-#define TRAIL_PLANET_AU      24.0f
-#define TRAIL_MOON_AU         0.5f
+ * vertices; smoothstep over the full arc gives the same visual result). */
 #define TRAIL_TAIL_FADE_FRAC  1.0f
 
 static float clampf_local(float x, float lo, float hi)
@@ -306,10 +296,6 @@ void trails_render(const float vp[16])
         glUniformMatrix4fv(s_loc_vp, 1, GL_FALSE, vp);
 
         {
-            const int cam_moved = (g_cam.pos[0] != s_last_cam[0] ||
-                                   g_cam.pos[1] != s_last_cam[1] ||
-                                   g_cam.pos[2] != s_last_cam[2]);
-
             glEnable(GL_DEPTH_TEST);
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -329,15 +315,11 @@ void trails_render(const float vp[16])
                 glBindVertexArray(s_vao[i]);
                 glBindBuffer(GL_ARRAY_BUFFER, s_vbo[i]);
 
-                /* did_upload tracks whether s_scratch is fresh for body i.
-                 * trail_prune_hidden_tail reads s_scratch; only call it when
-                 * we know s_scratch holds this body's arc data, not stale
-                 * data left over from a different body processed earlier. */
-                int did_upload = 0;
-                if (cam_moved || head != s_last_head[i] || count != s_last_count[i]) {
-                    trail_upload_body(i);
-                    did_upload = 1;
-                }
+                /* Always re-upload so arc values and s_total_len stay current
+                 * every frame. Skipping uploads when head/count/cam unchanged
+                 * caused discrete jumps in visible_len each time a new sample
+                 * fired, producing jerky transparency changes on short trails. */
+                trail_upload_body(i);
 
                 draw_count = count;
                 if (b->alive && b->trail_interval > 0.0) {
@@ -358,7 +340,7 @@ void trails_render(const float vp[16])
                 if (visible_len <= 0.0f) continue;
 
                 trail_fade_lengths(i, visible_len, &front_fade, &tail_fade);
-                if (did_upload && trail_prune_hidden_tail(i, visible_len)) {
+                if (trail_prune_hidden_tail(i, visible_len)) {
                     count = b->trail_count;
                     head = b->trail_head;
                     trail_upload_body(i);
@@ -392,10 +374,6 @@ void trails_render(const float vp[16])
                 if (s_spawn_fade_active[i] && s_total_len[i] >= front_fade)
                     s_spawn_fade_active[i] = 0;
             }
-
-            s_last_cam[0] = g_cam.pos[0];
-            s_last_cam[1] = g_cam.pos[1];
-            s_last_cam[2] = g_cam.pos[2];
 
             glDepthMask(GL_TRUE);
             glDisable(GL_BLEND);

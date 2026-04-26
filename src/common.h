@@ -43,7 +43,9 @@ extern int g_win_h;
 
 /* ------------------------------------------------------------------ sim */
 #define MAX_BODIES         128
-#define TRAIL_LEN  4096   /* trail circular buffer size (per body, all bodies) */
+#define TRAIL_LEN        4096   /* trail circular buffer size (per body, all bodies) */
+#define TRAIL_PLANET_AU  24.0f  /* target visible trail length for planets (AU)     */
+#define TRAIL_MOON_AU     0.5f  /* target visible trail length for moons (AU)       */
 #define NUM_STARS          4000
 
 /* 1 AU → 1.0 GL unit */

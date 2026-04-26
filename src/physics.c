@@ -429,6 +429,20 @@ void physics_step(double dt) {
 
 /* ── trail helpers ───────────────────────────────────────────────────── */
 static void sample_body(Body *b) {
+    /* Minimum arc gate: skip sample if body hasn't moved far enough from the
+     * last recorded position. This prevents proximity-adaptive sampling from
+     * filling the buffer with tiny-arc samples (e.g. tight binary pairs or
+     * close-encounter swing-bys), which would leave visible_len << target. */
+    if (b->trail_count > 0) {
+        int prev = (b->trail_head - 1 + TRAIL_LEN) % TRAIL_LEN;
+        double min_arc = b->is_moon ? (TRAIL_MOON_AU   / TRAIL_LEN)
+                                    : (TRAIL_PLANET_AU  / TRAIL_LEN);
+        double dx = b->pos[0] * RS - b->trail[prev][0];
+        double dy = b->pos[1] * RS - b->trail[prev][1];
+        double dz = b->pos[2] * RS - b->trail[prev][2];
+        if (dx*dx + dy*dy + dz*dz < min_arc * min_arc) return;
+    }
+
     b->trail[b->trail_head][0] = b->pos[0] * RS;
     b->trail[b->trail_head][1] = b->pos[1] * RS;
     b->trail[b->trail_head][2] = b->pos[2] * RS;
