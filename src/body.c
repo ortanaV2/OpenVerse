@@ -284,3 +284,14 @@ void body_world_to_local_surface_dir(int body_idx, const double world_dir[3],
     out[1] /= flen;
     out[2] /= flen;
 }
+
+void body_format_dist_au(double au, char *buf, size_t n) {
+    if (au < 0.001)
+        snprintf(buf, n, "%.0f km", au * AU / 1000.0);
+    else if (au < 1.0)
+        snprintf(buf, n, "%.4f AU", au);
+    else if (au < 1000.0)
+        snprintf(buf, n, "%.2f AU", au);
+    else
+        snprintf(buf, n, "%.3f ly", au / 63241.0);
+}

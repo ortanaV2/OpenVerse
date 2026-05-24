@@ -179,7 +179,7 @@ static GLint  s_impact_particle_vp = -1;
 static GLuint s_impact_particle_vao = 0;
 static GLuint s_impact_particle_vbo = 0;
 
-#define RENDER_MAX_COLLISION_PARTICLES 768
+#define RENDER_MAX_COLLISION_PARTICLES COLLISION_MAX_PARTICLES
 
 /* ------------------------------------------------------------------ star glare */
 
@@ -283,25 +283,6 @@ static float half_fov_tan(void) {
     return tanf(FOV * 0.5f * (float)(PI / 180.0));
 }
 
-/* Convert an SDL_Surface to a GL_RGBA texture and free the surface.
- * Converts to ABGR8888 first so byte order matches GL_RGBA on all platforms. */
-static GLuint build_surface_to_tex(SDL_Surface *surf, int *w, int *h) {
-    SDL_Surface *c = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ABGR8888, 0);
-    SDL_FreeSurface(surf);
-    if (!c) return 0;
-    *w = c->w; *h = c->h;
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, c->w, c->h,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, c->pixels);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    SDL_FreeSurface(c);
-    return tex;
-}
 
 /* Render `str` into tc->tex via SDL_TTF.  No-op if the string didn't change. */
 static void build_update_text(BuildTextCache *tc, const char *str) {
@@ -313,7 +294,7 @@ static void build_update_text(BuildTextCache *tc, const char *str) {
     }
     SDL_Color col = {235, 245, 255, 235};
     SDL_Surface *surf = TTF_RenderText_Blended(s_build_font, str, col);
-    if (surf) tc->tex = build_surface_to_tex(surf, &tc->w, &tc->h);
+    if (surf) tc->tex = gl_surf_to_tex(surf, &tc->w, &tc->h);
 }
 
 /* Upload a screen-space quad to the bound GL_ARRAY_BUFFER and draw it.
@@ -418,26 +399,6 @@ static void draw_ring_2d(const float rel[3], float dr,
     glBindVertexArray(0);
 }
 
-/* Format a distance in AU into a human-readable string, adapting units. */
-static void format_dist_au(double au, char *buf, size_t n) {
-    if (au < 0.001)
-        snprintf(buf, n, "%.0f km", au * AU / 1000.0);
-    else if (au < 1.0)
-        snprintf(buf, n, "%.4f AU", au);
-    else if (au < 1000.0)
-        snprintf(buf, n, "%.2f AU", au);
-    else
-        snprintf(buf, n, "%.3f ly", au / 63241.0);
-}
-
-static float clampf_local(float v, float lo, float hi)
-{
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
-
-static double smoothstepd(double edge0, double edge1, double x);
 
 /*
  * supernova_fullscreen_raster_local - choose whether a volumetric supernova
@@ -493,14 +454,6 @@ static float supernova_distance_fade_local(float dist, float radius)
 static float visual_radius(int i, float dcam) {
     (void)dcam;
     return (float)(collision_visual_radius(i, g_bodies[i].radius) * RS);
-}
-
-/* Smooth step in double precision — used for visibility fade calculations. */
-static double smoothstepd(double edge0, double edge1, double x) {
-    double t = (x - edge0) / (edge1 - edge0);
-    if (t < 0.0) t = 0.0;
-    if (t > 1.0) t = 1.0;
-    return t * t * (3.0 - 2.0 * t);
 }
 
 /*
@@ -1049,7 +1002,7 @@ static void render_build_preview(const float vp_camrel[16])
 
             char buf[96];
             char dist_buf[32];
-            format_dist_au(dist_au[k], dist_buf, sizeof(dist_buf));
+            body_format_dist_au(dist_au[k], dist_buf, sizeof(dist_buf));
             snprintf(buf, sizeof(buf), "%s  %s", b->name, dist_buf);
             build_update_text(&s_build_dist_text[k], buf);
             if (!s_build_dist_text[k].tex) continue;
@@ -1094,8 +1047,8 @@ static void render_build_preview(const float vp_camrel[16])
                 float cx = (sx > 0) ? psx + margin_x : psx - margin_x - max_w;
                 float cy = (sy < 0) ? preview_y - margin_y - list_h
                                      : preview_y + margin_y;
-                float clamped_x = clampf_local(cx, 8.0f, (float)WIN_W - max_w - 8.0f);
-                float clamped_y = clampf_local(cy, 8.0f, (float)WIN_H - list_h - 8.0f);
+                float clamped_x = clampf(cx, 8.0f, (float)WIN_W - max_w - 8.0f);
+                float clamped_y = clampf(cy, 8.0f, (float)WIN_H - list_h - 8.0f);
                 float center_x = clamped_x + max_w * 0.5f;
                 float center_y = clamped_y + list_h * 0.5f;
                 float vx = center_x - psx;
@@ -1517,7 +1470,7 @@ void render_frame(const float view[16], const float proj[16],
             } else {
                 core_bill_scale = 8.0f;
             }
-            core_bill_scale = clampf_local(core_bill_scale * 1.10f, 1.18f, 8.0f);
+            core_bill_scale = clampf(core_bill_scale * 1.10f, 1.18f, 8.0f);
             coverage_radius = e->cloud_radius > e->flash_radius ? e->cloud_radius : e->flash_radius;
             fullscreen_raster = supernova_fullscreen_raster_local(e->pos, cam_fwd,
                                                                   coverage_radius,

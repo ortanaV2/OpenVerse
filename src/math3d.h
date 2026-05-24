@@ -122,3 +122,14 @@ static inline int mat4_project(const Mat4 vp,
     *sy=(cy/cw+1.0f)*0.5f*(float)vp_h;
     return 1;
 }
+
+/* ---------------------------------------------------------------- scalar utils */
+static inline float  clampf(float  x, float  lo, float  hi)
+    { return x < lo ? lo : (x > hi ? hi : x); }
+static inline double clampd(double x, double lo, double hi)
+    { return x < lo ? lo : (x > hi ? hi : x); }
+static inline double smoothstepd(double e0, double e1, double x) {
+    double t = (x - e0) / (e1 - e0);
+    if (t < 0.0) t = 0.0; else if (t > 1.0) t = 1.0;
+    return t * t * (3.0 - 2.0 * t);
+}

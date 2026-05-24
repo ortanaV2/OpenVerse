@@ -91,3 +91,6 @@ void moon_to_state(
         double Omega_deg, double omega_deg, double M0_deg,
         double gm,
         double pos_m[3], double vel_ms[3]);
+
+/* Format a distance in AU into a human-readable string (km / AU / ly). */
+void body_format_dist_au(double au, char *buf, size_t n);

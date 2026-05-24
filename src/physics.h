@@ -42,8 +42,6 @@ double physics_system_outer_dt_limit(int idx);
 double physics_system_inner_dt_limit(int idx);
 void   physics_advance_time(double dt);
 
-/* Legacy single-step KDK (kept for reference / one-off use) */
-void physics_step(double dt);
 
 /* Trail helpers */
 void trails_begin_frame_snapshot(void);

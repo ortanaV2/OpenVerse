@@ -253,27 +253,6 @@ static BuildBarLayout build_bar_layout(float W)
     return layout;
 }
 
-/* ── GL texture helpers ───────────────────────────────────────────────────── */
-/* surf_to_tex — convert an SDL_Surface to an RGBA GL texture.
- * Converts to ABGR8888 first because that matches GL_RGBA / GL_UNSIGNED_BYTE
- * on little-endian platforms without a swizzle. */
-static GLuint surf_to_tex(SDL_Surface *surf, int *w, int *h) {
-    SDL_Surface *c = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ABGR8888, 0);
-    SDL_FreeSurface(surf);
-    if (!c) return 0;
-    *w = c->w; *h = c->h;
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, c->w, c->h,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, c->pixels);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    SDL_FreeSurface(c);
-    return tex;
-}
 
 /* Re-render text texture only when the string or colour changes. */
 static void update_text_with_font(TextCache *tc, TTF_Font *font,
@@ -287,7 +266,7 @@ static void update_text_with_font(TextCache *tc, TTF_Font *font,
     tc->col = col;
     if (tc->tex) { glDeleteTextures(1, &tc->tex); tc->tex = 0; }
     SDL_Surface *surf = TTF_RenderText_Blended(font, str, col);
-    if (surf) tc->tex = surf_to_tex(surf, &tc->w, &tc->h);
+    if (surf) tc->tex = gl_surf_to_tex(surf, &tc->w, &tc->h);
 }
 
 static void update_text(TextCache *tc, const char *str, SDL_Color col) {
@@ -315,19 +294,6 @@ static int pause_menu_item_at(float mx, float my)
     return -1;
 }
 
-/* ── distance formatting ──────────────────────────────────────────────────── */
-/* Auto-scales to km / AU / ly based on magnitude. */
-static void format_distance(double au, char *buf, size_t n)
-{
-    if (au < 0.001)
-        snprintf(buf, n, "%.0f km", au * AU / 1000.0);
-    else if (au < 1.0)
-        snprintf(buf, n, "%.4f AU", au);
-    else if (au < 1000.0)
-        snprintf(buf, n, "%.2f AU", au);
-    else
-        snprintf(buf, n, "%.3f ly", au / 63241.0);
-}
 
 /*
  * nearest_body_distance_string — find the nearest body to the camera and
@@ -377,7 +343,7 @@ static void nearest_body_distance_string(char *buf, size_t n)
         snprintf(buf, n, "nearest --");
     } else {
         char dist[32];
-        format_distance(best_d, dist, sizeof(dist));
+        body_format_dist_au(best_d, dist, sizeof(dist));
         snprintf(buf, n, "%.31s  %.28s", g_bodies[best].name, dist);
     }
 }

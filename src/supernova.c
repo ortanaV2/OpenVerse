@@ -22,6 +22,7 @@
  */
 #include "supernova.h"
 #include "body.h"
+#include "math3d.h"
 #include "collision.h"
 #include "labels.h"
 #include "trails.h"
@@ -62,28 +63,6 @@ typedef struct {
 
 static SupernovaEvent s_events[SUPERNOVA_MAX_EVENTS];
 
-static double clampd_local(double v, double lo, double hi)
-{
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
-
-static float clampf_local(float v, float lo, float hi)
-{
-    if (v < lo) return lo;
-    if (v > hi) return hi;
-    return v;
-}
-
-static double smoothstepd_local(double edge0, double edge1, double x)
-{
-    double t;
-    if (edge0 == edge1) return x >= edge1 ? 1.0 : 0.0;
-    t = (x - edge0) / (edge1 - edge0);
-    t = clampd_local(t, 0.0, 1.0);
-    return t * t * (3.0 - 2.0 * t);
-}
 
 static double rise_and_fall(double age, double rise_seconds, double decay_seconds)
 {
@@ -217,7 +196,7 @@ static void event_center_from_pair(int a, int b, double hit_t, double frame_dt,
 
     if (frame_dt > 0.0) {
         back_dt = frame_dt - hit_t;
-        back_dt = clampd_local(back_dt, 0.0, frame_dt);
+        back_dt = clampd(back_dt, 0.0, frame_dt);
     }
 
     pos_a[0] = g_bodies[a].pos[0] - g_bodies[a].vel[0] * back_dt;
@@ -319,7 +298,7 @@ int supernova_try_trigger(int star_a, int star_b, double rel_speed,
      * read like a stellar catastrophe without simulating compact-object classes
      * or detailed nucleosynthesis outcomes. */
     remnant_mass = total_mass * 0.72;
-    remnant_mass = clampd_local(remnant_mass, 1.10 * SOLAR_MASS,
+    remnant_mass = clampd(remnant_mass, 1.10 * SOLAR_MASS,
                                 fmin(total_mass * 0.92, 3.2 * SOLAR_MASS));
     if (remnant_mass >= total_mass) remnant_mass = total_mass * 0.88;
     if (remnant_mass <= 0.0) remnant_mass = total_mass * 0.60;
@@ -461,7 +440,7 @@ void supernova_step(double dt)
                 momentum = 0.42 * e->ejecta_mass * e->shock_speed *
                            (b->radius * b->radius) / (4.0 * dist2);
                 dv_mag = momentum / subtree_mass;
-                dv_mag = clampd_local(dv_mag, 0.0, e->shock_speed * 0.06);
+                dv_mag = clampd(dv_mag, 0.0, e->shock_speed * 0.06);
 
                 dv[0] = dir[0] * dv_mag;
                 dv[1] = dir[1] * dv_mag;
@@ -508,8 +487,8 @@ int supernova_render_events(SupernovaRenderEvent *out, int max_events,
         cloud_fade = exp(-age / (DAY * 110.0));
         cloud_impulse = 1.0 - exp(-age / (DAY * 0.11));
         cloud_spread = pow(1.0 + age / (DAY * 0.85), 0.82) - 1.0;
-        end_fade = 1.0 - smoothstepd_local(0.58, 1.0, cloud_t);
-        tail_fade = 1.0 - smoothstepd_local(0.60, 1.0, cloud_t);
+        end_fade = 1.0 - smoothstepd(0.58, 1.0, cloud_t);
+        tail_fade = 1.0 - smoothstepd(0.60, 1.0, cloud_t);
         tail_fade = tail_fade * tail_fade * tail_fade;
 
         flash_alpha = 1.28 * rise_and_fall(age, DAY * 0.012, DAY * 0.42)
@@ -548,10 +527,10 @@ int supernova_render_events(SupernovaRenderEvent *out, int max_events,
         r->core_radius = (float)(core_radius * RS);
         r->cloud_radius = (float)(cloud_radius * RS);
         r->cloud_inner_radius = (float)(cloud_radius * inner_ratio * RS);
-        r->flash_intensity = clampf_local((float)flash_alpha, 0.0f, 1.0f);
-        r->core_intensity = clampf_local((float)core_alpha, 0.0f, 1.0f);
-        r->cloud_intensity = clampf_local((float)cloud_alpha, 0.0f, 1.0f);
-        r->hot_shell_intensity = clampf_local((float)hot_alpha, 0.0f, 1.0f);
+        r->flash_intensity = clampf((float)flash_alpha, 0.0f, 1.0f);
+        r->core_intensity = clampf((float)core_alpha, 0.0f, 1.0f);
+        r->cloud_intensity = clampf((float)cloud_alpha, 0.0f, 1.0f);
+        r->hot_shell_intensity = clampf((float)hot_alpha, 0.0f, 1.0f);
         r->color[0] = e->color[0];
         r->color[1] = e->color[1];
         r->color[2] = e->color[2];

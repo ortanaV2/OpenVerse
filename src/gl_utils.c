@@ -115,3 +115,21 @@ GLuint gl_ebo_create(size_t bytes, const unsigned int *data) {
     glBufferData(GL_ELEMENT_ARRAY_BUFFER, (GLsizeiptr)bytes, data, GL_STATIC_DRAW);
     return ebo;
 }
+
+GLuint gl_surf_to_tex(SDL_Surface *surf, int *w, int *h) {
+    SDL_Surface *c = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ABGR8888, 0);
+    SDL_FreeSurface(surf);
+    if (!c) return 0;
+    *w = c->w; *h = c->h;
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, c->w, c->h,
+                 0, GL_RGBA, GL_UNSIGNED_BYTE, c->pixels);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    SDL_FreeSurface(c);
+    return tex;
+}

@@ -43,10 +43,6 @@ static int    s_bright_count = 0;
 
 static float randf(void) { return (float)rand() / (float)RAND_MAX; }
 
-static float clampf(float x, float lo, float hi)
-{
-    return x < lo ? lo : (x > hi ? hi : x);
-}
 
 static int star_cmp_faint_to_bright(const void *a, const void *b)
 {

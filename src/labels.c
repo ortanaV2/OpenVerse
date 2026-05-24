@@ -101,25 +101,6 @@ static TTF_Font *s_font = NULL;
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 
-/* Upload an SDL_Surface as a GL_RGBA texture and free the surface. */
-static GLuint surface_to_texture(SDL_Surface *surf, int *w, int *h) {
-    SDL_Surface *conv = SDL_ConvertSurfaceFormat(surf, SDL_PIXELFORMAT_ABGR8888, 0);
-    SDL_FreeSurface(surf);
-    if (!conv) return 0;
-
-    *w = conv->w; *h = conv->h;
-    GLuint tex;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, conv->w, conv->h,
-                 0, GL_RGBA, GL_UNSIGNED_BYTE, conv->pixels);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-    SDL_FreeSurface(conv);
-    return tex;
-}
 
 /*
  * build_label_texture — render the body name into s_tex[i] via SDL_TTF.
@@ -151,7 +132,7 @@ static void build_label_texture(int i)
     TTF_SetFontStyle(s_font, is_moon ? TTF_STYLE_ITALIC : TTF_STYLE_NORMAL);
     SDL_Surface *surf = TTF_RenderText_Blended(s_font, g_bodies[i].name, col);
     if (!surf) { TTF_SetFontStyle(s_font, TTF_STYLE_NORMAL); return; }
-    s_tex[i] = surface_to_texture(surf, &s_tex_w[i], &s_tex_h[i]);
+    s_tex[i] = gl_surf_to_tex(surf, &s_tex_w[i], &s_tex_h[i]);
     TTF_SetFontStyle(s_font, TTF_STYLE_NORMAL);
 }
 

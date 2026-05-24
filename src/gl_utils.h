@@ -28,3 +28,10 @@ GLuint gl_vbo_create(size_t bytes, const void *data, GLenum usage);
  * Left bound to GL_ELEMENT_ARRAY_BUFFER on return.
  */
 GLuint gl_ebo_create(size_t bytes, const unsigned int *data);
+
+/*
+ * Convert an SDL_Surface to a GL_RGBA texture, freeing the surface.
+ * Converts to ABGR8888 so byte order matches GL_RGBA on all platforms.
+ * Returns 0 on failure. Writes dimensions to *w / *h.
+ */
+GLuint gl_surf_to_tex(SDL_Surface *surf, int *w, int *h);

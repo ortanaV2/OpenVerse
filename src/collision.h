@@ -4,7 +4,8 @@
 #pragma once
 #include "common.h"
 
-#define COLLISION_MAX_SPOTS 32
+#define COLLISION_MAX_SPOTS      32
+#define COLLISION_MAX_PARTICLES 768
 
 typedef enum {
     COLLISION_VIS_CRATER    = 1,

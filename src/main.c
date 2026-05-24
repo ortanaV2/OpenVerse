@@ -110,7 +110,6 @@ static int s_speed_idx = 4;   /* start at 1.0 days/s */
  * Pressing T clamps the current speed to the warp range and shows "WARP" in HUD. */
 #define WARP_SPEED_MIN_AU    200.0f
 #define WARP_SPEED_MAX_AU  63241.0f
-int s_warp = 0;
 int g_warp = 0;
 
 /* ── logging helpers ──────────────────────────────────────────────────────── */
@@ -310,7 +309,7 @@ static void reset_universe_state(void) {
     supernova_reset();
     clear_movement_keys();
     s_freelook = 0;
-    s_warp = 0;
+    g_warp = 0;
     g_warp = 0;
     s_speed_idx = 4;
     g_sim_time = 0.0;
@@ -593,7 +592,6 @@ static void handle_event(const SDL_Event *e, float dt, int *running) {
 
     switch (e->type) {
     case SDL_QUIT:
-        /* handled in main loop */
         break;
 
     case SDL_KEYDOWN:
@@ -650,16 +648,16 @@ static void handle_event(const SDL_Event *e, float dt, int *running) {
             break;
         case SDLK_t:
             /* Toggle warp mode, clamping speed into the appropriate range. */
-            s_warp = !s_warp;
-            g_warp = s_warp;
-            if (s_warp) {
+            g_warp = !g_warp;
+            g_warp = g_warp;
+            if (g_warp) {
                 if (g_cam.speed < WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
                 if (g_cam.speed > WARP_SPEED_MAX_AU) g_cam.speed = WARP_SPEED_MAX_AU;
             } else {
                 if (g_cam.speed > WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
             }
             fprintf(stdout, "[Cam] warp %s (%.0f AU/s = %.4f ly/s)\n",
-                    s_warp ? "ON" : "OFF",
+                    g_warp ? "ON" : "OFF",
                     (double)g_cam.speed,
                     (double)(g_cam.speed / WARP_SPEED_MAX_AU));
             break;
@@ -747,7 +745,7 @@ static void handle_event(const SDL_Event *e, float dt, int *running) {
         }
         /* Speed steps by ×1.3 per notch; clamped to the active range. */
         g_cam.speed *= (e->wheel.y > 0) ? 1.3f : (1.0f / 1.3f);
-        if (s_warp) {
+        if (g_warp) {
             if (g_cam.speed < WARP_SPEED_MIN_AU) g_cam.speed = WARP_SPEED_MIN_AU;
             if (g_cam.speed > WARP_SPEED_MAX_AU) g_cam.speed = WARP_SPEED_MAX_AU;
         } else {

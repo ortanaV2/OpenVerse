@@ -247,10 +247,6 @@ static int is_satellite(int i) {
     return g_bodies[i].parent >= 0 && !g_bodies[g_bodies[i].parent].is_star;
 }
 
-/* A body has a fast parent if and only if it is a satellite (moon). */
-static int has_fast_parent(int i) {
-    return is_satellite(i);
-}
 
 /* ── timestep model (re)build ───────────────────────────────────────────── */
 
@@ -523,7 +519,7 @@ static void compute_acc_slow_system(int root) {
  * acceleration from each ancestor.  Newton's 3rd law reaction is applied back
  * to each ancestor (the reaction is tiny but keeps total momentum exact).
  *
- * Only bodies satisfying has_fast_parent() (moons) are processed here.
+ * Only bodies satisfying is_satellite() (moons) are processed here.
  * Stores results in Body.fast_acc[], separate from Body.acc[] (slow forces),
  * so both can be combined independently at the KDK half-kick stages.
  */
@@ -539,7 +535,7 @@ static void compute_acc_fast_system(int root) {
 
         for (i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].alive || !in_system(i, root)) continue;
-            if (!has_fast_parent(i)) continue;
+            if (!is_satellite(i)) continue;
             for (int p = g_bodies[i].parent; p >= 0; p = g_bodies[p].parent) {
                 if (!g_bodies[p].alive || !in_system(p, root)) continue;
                 double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
@@ -573,7 +569,7 @@ static void compute_acc_fast_system(int root) {
     for (int mi = 0; mi < s_system_member_count[slot]; mi++) {
         i = s_system_members[slot][mi];
         if (!g_bodies[i].alive) continue;
-        if (!has_fast_parent(i)) continue;
+        if (!is_satellite(i)) continue;
         for (int p = g_bodies[i].parent; p >= 0; p = g_bodies[p].parent) {
             if (!g_bodies[p].alive || !in_system(p, root)) continue;
             double dx = g_bodies[p].pos[0] - g_bodies[i].pos[0];
@@ -761,64 +757,6 @@ void physics_respa_end_system(int root, double dt_outer) {
             g_bodies[i].cloud_rotation += g_bodies[i].rotation_rate * 1.15 * dt_outer;
         }
     }
-}
-
-/* ── legacy single-step KDK (used during warmup, not in the main loop) ──── */
-
-/* Full all-pairs O(N²) force evaluation — no RESPA split. */
-static void compute_acc(void) {
-    int i, j;
-    for (i = 0; i < g_nbodies; i++)
-        g_bodies[i].acc[0] = g_bodies[i].acc[1] = g_bodies[i].acc[2] = 0.0;
-    for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].alive) continue;
-        for (j = i + 1; j < g_nbodies; j++) {
-            if (!g_bodies[j].alive) continue;
-            double dx = g_bodies[j].pos[0] - g_bodies[i].pos[0];
-            double dy = g_bodies[j].pos[1] - g_bodies[i].pos[1];
-            double dz = g_bodies[j].pos[2] - g_bodies[i].pos[2];
-            double r2 = dx*dx + dy*dy + dz*dz + SOFTENING*SOFTENING;
-            double r  = sqrt(r2);
-            double f  = G_CONST / (r2 * r);
-            double ai = f * g_bodies[j].mass;
-            double aj = f * g_bodies[i].mass;
-            g_bodies[i].acc[0] += ai * dx; g_bodies[i].acc[1] += ai * dy; g_bodies[i].acc[2] += ai * dz;
-            g_bodies[j].acc[0] -= aj * dx; g_bodies[j].acc[1] -= aj * dy; g_bodies[j].acc[2] -= aj * dz;
-        }
-    }
-}
-
-/* physics_step — simple KDK leapfrog using compute_acc (legacy / warmup). */
-void physics_step(double dt) {
-    int i;
-    compute_acc();
-    for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].alive) continue;
-        g_bodies[i].vel[0] += 0.5 * g_bodies[i].acc[0] * dt;
-        g_bodies[i].vel[1] += 0.5 * g_bodies[i].acc[1] * dt;
-        g_bodies[i].vel[2] += 0.5 * g_bodies[i].acc[2] * dt;
-    }
-    for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].alive) continue;
-        g_bodies[i].pos[0] += g_bodies[i].vel[0] * dt;
-        g_bodies[i].pos[1] += g_bodies[i].vel[1] * dt;
-        g_bodies[i].pos[2] += g_bodies[i].vel[2] * dt;
-    }
-    compute_acc();
-    for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].alive) continue;
-        g_bodies[i].vel[0] += 0.5 * g_bodies[i].acc[0] * dt;
-        g_bodies[i].vel[1] += 0.5 * g_bodies[i].acc[1] * dt;
-        g_bodies[i].vel[2] += 0.5 * g_bodies[i].acc[2] * dt;
-    }
-    for (i = 0; i < g_nbodies; i++) {
-        if (!g_bodies[i].alive) continue;
-        g_bodies[i].rotation_angle = fmod(
-            g_bodies[i].rotation_angle + g_bodies[i].rotation_rate * dt,
-            2.0 * PI);
-        g_bodies[i].cloud_rotation += g_bodies[i].rotation_rate * 1.15 * dt;
-    }
-    g_sim_time += dt;
 }
 
 /* ── trail system ────────────────────────────────────────────────────────── */

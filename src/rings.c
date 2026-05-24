@@ -59,6 +59,7 @@
  */
 #include "rings.h"
 #include "common.h"
+#include "math3d.h"
 #include "body.h"
 #include "camera.h"
 #include "collision.h"
@@ -187,10 +188,6 @@ static float s_randf(void) {
 
 /* ── § MATH — local scalar/vector helpers and planet filtering ──────────── */
 
-static float clampf(float x, float lo, float hi)
-{
-    return x < lo ? lo : (x > hi ? hi : x);
-}
 
 static float wrap_angle_pi(float a)
 {

@@ -41,7 +41,7 @@
 #define MERGE_PHASE_SECONDS (DAY * 8.0)
 #define MAX_MERGES 16
 #define MAX_PERSISTENT_SCARS 128
-#define MAX_COLLISION_PARTICLES 768
+#define MAX_COLLISION_PARTICLES COLLISION_MAX_PARTICLES
 #define STAR_HEAT_START_SCALE 4.0
 
 typedef struct {
@@ -2208,9 +2208,9 @@ void collision_step(double dt)
         if (s->fade >= 1.0f) { s->fade = 1.0f; s->fade_rate = 0.0f; }
     }
 
+    double drag = exp(-dt / (DAY * 18.0));
     for (int i = 0; i < MAX_COLLISION_PARTICLES; i++) {
         ImpactParticleState *p = &s_particles[i];
-        double drag;
         if (!p->active) continue;
         p->age += dt;
         if (p->age >= p->duration) {
@@ -2220,9 +2220,6 @@ void collision_step(double dt)
         p->pos[0] += p->vel[0] * dt;
         p->pos[1] += p->vel[1] * dt;
         p->pos[2] += p->vel[2] * dt;
-        /* Mild time-based drag so debris keeps travelling with the impact
-         * instead of appearing to freeze in world space. */
-        drag = exp(-dt / (DAY * 18.0));
         p->vel[0] *= drag;
         p->vel[1] *= drag;
         p->vel[2] *= drag;
