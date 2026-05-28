@@ -138,7 +138,8 @@ static int get_planet_type(const char *name)
     if (strncmp(name, "Rocky Planet", 12) == 0) return 10;
     if (strncmp(name, "Gas Giant",    9)  == 0) return 11;
     if (strncmp(name, "Ice Planet",   10) == 0) return 12;
-    if (strncmp(name, "Dwarf Planet", 12) == 0) return 0;
+    if (strncmp(name, "Dwarf Planet", 12) == 0) return 14;
+    if (strncmp(name, "Moon",          4) == 0) return 14;
     for (k = 0; tbl[k].name; k++)
         if (strcmp(name, tbl[k].name) == 0) return tbl[k].ptype;
     return 0;

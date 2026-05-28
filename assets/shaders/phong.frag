@@ -161,7 +161,7 @@ vec3 moon_normal(vec3 NL)
     float dh_b = moon_height(normalize(NL + bitangent * eps))
                - moon_height(normalize(NL - bitangent * eps));
 
-    return normalize(NL - tangent * dh_t * 3.2 - bitangent * dh_b * 3.2);
+    return normalize(NL - tangent * dh_t * 1.2 - bitangent * dh_b * 1.2);
 }
 
 /* ======================================================================
