@@ -61,6 +61,7 @@
 #include "math3d.h"
 #include "supernova.h"
 #include "blackhole.h"
+#include "lensing.h"
 #include "ui_theme.h"
 #include <math.h>
 #include <string.h>
@@ -917,6 +918,7 @@ void render_init(void) {
     s_build_font = ui_theme_open_font((int)BUILD_UI_FONT_SIZE);
 
     blackhole_init();
+    lensing_init();
 }
 
 /*
@@ -1182,6 +1184,20 @@ void render_frame(const float view[16], const float proj[16],
     mat4_get_up   (view_rot, cam_up);
     mat4_get_fwd  (view_rot, cam_fwd);
 
+    /* Gravitational lensing: the scene (sky + bodies) is captured into an
+     * offscreen colour buffer here. At the end of the frame lensing_resolve()
+     * composites each black hole by integrating bent photon paths per pixel —
+     * horizon, accretion disk and photon ring are computed from geometry and the
+     * background is re-sampled in the deflected direction (see lensing.frag).
+     * When lensing is active the disk/ring are NOT rasterized (the compositor
+     * draws them), so they are not double-drawn. Labels/UI come after the
+     * resolve on the default framebuffer. The clear targets the offscreen fb. */
+    int lens_active = 0;
+    for (int i = 0; i < g_nbodies; i++)
+        if (g_bodies[i].alive && g_bodies[i].is_black_hole) { lens_active = 1; break; }
+    if (lens_active) lens_active = lensing_begin_scene();
+    if (lens_active) glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
     SupernovaRenderEvent sn_events[SUPERNOVA_MAX_EVENTS];
     int sn_count = supernova_render_events(sn_events, SUPERNOVA_MAX_EVENTS, g_cam.pos);
 
@@ -1197,6 +1213,10 @@ void render_frame(const float view[16], const float proj[16],
     glDepthMask(GL_FALSE);
     starfield_render(view_rot, proj);
     glDepthMask(GL_TRUE);
+
+    /* Snapshot the sky now (only the starfield has been drawn) so the lensing
+     * resolve can bend it by direction without duplicating near geometry. */
+    if (lens_active) lensing_capture_background();
 
     /* ------------------------------------------------------------------ 2. Spheres */
     glEnable(GL_DEPTH_TEST);
@@ -1277,6 +1297,11 @@ void render_frame(const float view[16], const float proj[16],
 
         if (!g_bodies[i].alive || info[i].show) continue;
         if (is_glare_star(b)) continue;   /* stars rendered as glare only, not Phong spheres */
+        /* When lensing is active the geodesic compositor draws the event horizon
+         * itself; rasterizing the black sphere here would leave a dark blob in
+         * the captured scene that the bent background rays then sample, producing
+         * a dark halo with a hard edge at the influence boundary. */
+        if (b->is_black_hole && lens_active) continue;
 
         /* u_oc: camera − body, computed in double then cast to float.
          * u_center = −u_oc so the phong.vert billboard is camera-relative. */
@@ -1871,8 +1896,13 @@ void render_frame(const float view[16], const float proj[16],
     /* ------------------------------------------------------------------ 6.2. Black holes
      * Accretion disks and photon rings. Drawn after star glare so they compose
      * additively over trails/glare while still being depth-occluded by the
-     * opaque event-horizon spheres rendered in the sphere pass. */
-    blackhole_render(vp_camrel, cam_right, cam_up, cam_fwd);
+     * opaque event-horizon spheres rendered in the sphere pass.
+     *
+     * Skipped when lensing is active: the geodesic compositor (lensing_resolve,
+     * below) draws the disk and photon ring itself so the disk can wrap over the
+     * hole. Rasterizing here too would double-draw it. */
+    if (!lens_active)
+        blackhole_render(vp_camrel, cam_right, cam_up, cam_fwd);
 
     /* ------------------------------------------------------------------ 6.5. Build preview */
     render_build_preview(vp_camrel);
@@ -1882,6 +1912,44 @@ void render_frame(const float view[16], const float proj[16],
         float rel[3], dr, aa;
         if (inspect_ring_params(info, rel, &dr, &aa))
             draw_ring_2d(rel, dr, aa, vp_camrel);
+    }
+
+    /* ------------------------------------------------- 6.9. Lensing resolve
+     * Composite the black holes onto the captured scene via geodesic ray
+     * bending. Done after every 3D element but before the labels, so text on
+     * the default framebuffer stays undistorted. */
+    if (lens_active) {
+        LensSource src[LENS_MAX_HOLES];
+        int n = 0;
+        float fov_tan = tanf(FOV * 0.5f * (float)(PI / 180.0));
+        for (int i = 0; i < g_nbodies && n < LENS_MAX_HOLES; i++) {
+            Body *h = &g_bodies[i];
+            if (!h->alive || !h->is_black_hole) continue;
+
+            float horizon_au = (float)(h->radius * RS);
+
+            /* Disk plane basis from obliquity (matches blackhole.c disk_basis):
+             * u stays on world X, v completes the tilted plane, n = u x v. */
+            double o = h->obliquity * (PI / 180.0);
+            float cs = (float)cos(o), sn = (float)sin(o);
+
+            LensSource *s = &src[n];
+            s->center[0] = (float)(h->pos[0] * RS - g_cam.pos[0]);
+            s->center[1] = (float)(h->pos[1] * RS - g_cam.pos[1]);
+            s->center[2] = (float)(h->pos[2] * RS - g_cam.pos[2]);
+            s->r_horizon = horizon_au;
+            s->r_inner   = h->disk_outer > 0.0f ? horizon_au * h->disk_inner : 0.0f;
+            s->r_outer   = h->disk_outer > 0.0f ? horizon_au * h->disk_outer : 0.0f;
+            s->disk_u[0] = 1.0f; s->disk_u[1] = 0.0f; s->disk_u[2] = 0.0f;
+            s->disk_v[0] = 0.0f; s->disk_v[1] = sn;   s->disk_v[2] = -cs;
+            s->disk_n[0] = 0.0f; s->disk_n[1] = cs;   s->disk_n[2] = sn;
+            s->color[0]  = h->disk_color[0];
+            s->color[1]  = h->disk_color[1];
+            s->color[2]  = h->disk_color[2];
+            s->disk_time = (float)fmod(h->disk_angle, 2.0 * PI);
+            n++;
+        }
+        lensing_resolve(src, n, cam_right, cam_up, cam_fwd, fov_tan);
     }
 
     /* ------------------------------------------------------------------ 7. Labels */
@@ -1905,6 +1973,7 @@ void render_shutdown(void) {
     if (s_build_font) TTF_CloseFont(s_build_font);
     TTF_Quit();
     blackhole_shutdown();
+    lensing_shutdown();
     glDeleteProgram(s_sphere_shader);
     glDeleteProgram(s_atm_shader);
     glDeleteProgram(s_dot_shader);
