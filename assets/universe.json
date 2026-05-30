@@ -18,6 +18,47 @@
       "rotation_period_days": 25.38
     },
 
+    // ================================================================
+    // Sagittarius-lite — a stellar-mass black hole system.
+    // A black hole is a system root like a star: it accepts pos_ly, mass,
+    // radius_km, color, rotation, and an optional accretion_disk block whose
+    // inner/outer radii are multiples of the event-horizon (radius_km).
+    // radius_km here is an enlarged *visual* horizon so it is easy to find.
+    // ================================================================
+    {
+      "name": "Gargantua",
+      "type": "black_hole",
+      "pos_ly": [3.0, 0.5, -2.0],
+      "mass": 1.989e31,
+      "radius_km": 60000.0,
+      "color": [0.45, 0.22, 0.05],
+      "obliquity_deg": 18.0,
+      "rotation_period_days": 0.2,
+      "accretion_disk": {
+        "color": [1.0, 0.55, 0.18],
+        "inner": 2.6,
+        "outer": 9.0
+      }
+    },
+    {
+      "name": "Miller",
+      "type": "planet",
+      "parent": "Gargantua",
+      "mass": 5.972e24,
+      "radius_km": 6371.0,
+      "color": [0.40, 0.46, 0.55],
+      "obliquity_deg": 12.0,
+      "rotation_period_days": 1.1,
+      "keplerian": {
+        "a": 3.5,
+        "e": 0.04,
+        "i": 6.0,
+        "Omega": 40.0,
+        "omega_tilde": 110.0,
+        "L": 20.0
+      }
+    },
+
     // ----------------------------------------------------------------
     // Planets — Solar System
     // ----------------------------------------------------------------

@@ -60,9 +60,17 @@
 #include "gl_utils.h"
 #include "math3d.h"
 #include "supernova.h"
+#include "blackhole.h"
 #include "ui_theme.h"
 #include <math.h>
 #include <string.h>
+
+/* A black hole is a system root (is_star=1) but must never use the star glare /
+ * dot path — it has its own dark sphere, photon ring, and accretion disk. */
+static inline int is_glare_star(const Body *b)
+{
+    return b->is_star && !b->is_black_hole;
+}
 
 /* ------------------------------------------------------------------ sphere */
 
@@ -539,7 +547,7 @@ static float body_point_star_glare_visibility(int body_idx) {
     for (int i = 0; i < g_nbodies; i++) {
         if (i == body_idx) continue;
         Body *s = &g_bodies[i];
-        if (!s->alive || !s->is_star) continue;
+        if (!s->alive || !is_glare_star(s)) continue;
 
         /* Project star position onto the ray */
         double sx = s->pos[0] * RS - g_cam.pos[0];
@@ -590,7 +598,7 @@ static float system_dot_fade_for_body(int body_idx)
     const double FREE_DOT_FADE_END = 800.0;
 
     if (body_idx < 0 || body_idx >= g_nbodies) return 1.0f;
-    if (g_bodies[body_idx].is_star) return 1.0f;
+    if (is_glare_star(&g_bodies[body_idx])) return 1.0f;
 
     ref_star = body_root_star(body_idx);
     if (ref_star < 0 || ref_star >= g_nbodies ||
@@ -643,7 +651,7 @@ static int body_point_occluded_by_body(int body_idx, const BodyRenderInfo info[]
     for (int i = 0; i < g_nbodies; i++) {
         if (i == body_idx) continue;
         /* Only bodies rendered as spheres (not dots) can occlude */
-        if (!g_bodies[i].alive || g_bodies[i].is_star || info[i].show) continue;
+        if (!g_bodies[i].alive || is_glare_star(&g_bodies[i]) || info[i].show) continue;
 
         double sx = g_bodies[i].pos[0] * RS - g_cam.pos[0];
         double sy = g_bodies[i].pos[1] * RS - g_cam.pos[1];
@@ -907,6 +915,8 @@ void render_init(void) {
     }
     TTF_Init();
     s_build_font = ui_theme_open_font((int)BUILD_UI_FONT_SIZE);
+
+    blackhole_init();
 }
 
 /*
@@ -1266,7 +1276,7 @@ void render_frame(const float view[16], const float proj[16],
         info[i].show = (!use_fullscreen && px < BODY_SPHERE_APPEAR_PX) ? 1 : 0;
 
         if (!g_bodies[i].alive || info[i].show) continue;
-        if (b->is_star) continue;   /* stars rendered as glare only, not Phong spheres */
+        if (is_glare_star(b)) continue;   /* stars rendered as glare only, not Phong spheres */
 
         /* u_oc: camera − body, computed in double then cast to float.
          * u_center = −u_oc so the phong.vert billboard is camera-relative. */
@@ -1289,9 +1299,13 @@ void render_frame(const float view[16], const float proj[16],
         glUniform1f(s_sp_radius,   dr);
         glUniform3f(s_sp_oc,       oc_x, oc_y, oc_z);
         glUniform3f(s_sp_sun_rel,  sr_x, sr_y, sr_z);
-        glUniform3f(s_sp_color,    b->col[0], b->col[1], b->col[2]);
-        glUniform1f(s_sp_emission, b->is_star ? 1.0f : 0.0f);
-        glUniform1f(s_sp_ambient,  b->is_star ? 1.0f : 0.05f);
+        /* Black hole: render the event horizon as a pure-black sphere that only
+         * occludes the background; emission and ambient are zero. */
+        glUniform3f(s_sp_color,    b->is_black_hole ? 0.0f : b->col[0],
+                                   b->is_black_hole ? 0.0f : b->col[1],
+                                   b->is_black_hole ? 0.0f : b->col[2]);
+        glUniform1f(s_sp_emission, is_glare_star(b) ? 1.0f : 0.0f);
+        glUniform1f(s_sp_ambient,  b->is_black_hole ? 0.0f : (b->is_star ? 1.0f : 0.05f));
         glUniform1f(s_sp_rotation,        (float)fmod(b->rotation_angle, 2.0 * PI));
         glUniform1f(s_sp_cloud_rotation,  (float)b->cloud_rotation);
         glUniform1f(s_sp_obliquity, (float)(b->obliquity * (PI / 180.0)));
@@ -1607,7 +1621,7 @@ void render_frame(const float view[16], const float proj[16],
     int dot_stars[MAX_BODIES], dot_planets[MAX_BODIES], dot_moons[MAX_BODIES];
     for (int i = 0; i < g_nbodies; i++) {
         if (!g_bodies[i].alive) continue;
-        if      (g_bodies[i].is_star)       dot_stars  [dot_ns++] = i;
+        if      (is_glare_star(&g_bodies[i])) dot_stars  [dot_ns++] = i;
         else if (g_bodies[i].parent < 0 ||
                  g_bodies[g_bodies[i].parent].is_star) dot_planets[dot_np++] = i;
         else                                           dot_moons  [dot_nm++] = i;
@@ -1658,10 +1672,10 @@ void render_frame(const float view[16], const float proj[16],
             /* Pre-filter: fully occluded by a star's glare corona */
             if (body_point_star_glare_visibility(i) <= 0.02f) continue;
             /* Pre-filter: star has grown large enough that its glare disc replaces its dot */
-            if (g_bodies[i].is_star &&
+            if (is_glare_star(&g_bodies[i]) &&
                 body_px[i] * STAR_GLARE_BILL_SCALE >= STAR_DOT_FADE_START_GLARE_PX) continue;
             /* Pre-filter: non-star body is large enough to be rendered as a sphere */
-            if (!g_bodies[i].is_star && body_px[i] >= BODY_DOT_FADE_END_PX)
+            if (!is_glare_star(&g_bodies[i]) && body_px[i] >= BODY_DOT_FADE_END_PX)
                 continue;
             if (body_point_occluded_by_body(i, info)) continue;
             Body *bi = &g_bodies[i];
@@ -1670,7 +1684,7 @@ void render_frame(const float view[16], const float proj[16],
             float ry = (float)(bi->pos[1] * RS - cy2);
             float rz = (float)(bi->pos[2] * RS - cz2);
             /* Clamp distant stars to near sphere so they remain on-screen at warp */
-            if (bi->is_star) {
+            if (is_glare_star(bi)) {
                 float d = sqrtf(rx*rx + ry*ry + rz*rz);
                 if (d > DOT_CLAMP_DIST_OV && d > 1e-6f) {
                     float s = DOT_CLAMP_DIST_OV / d;
@@ -1725,12 +1739,12 @@ void render_frame(const float view[16], const float proj[16],
             if (!dot_candidate[i] || dot_overlap_alpha[i] <= 0.001f) continue;
             Body *b = &g_bodies[i];
 
-            float f = b->is_star ? 1.0f : system_dot_fade_for_body(i);
+            float f = is_glare_star(b) ? 1.0f : system_dot_fade_for_body(i);
             f *= dot_overlap_alpha[i];
             f *= body_point_star_glare_visibility(i);
 
             /* Star: fade dot as glare billboard grows large enough to represent it */
-            if (b->is_star) {
+            if (is_glare_star(b)) {
                 float glare_px = body_px[i] * STAR_GLARE_BILL_SCALE;
                 if (glare_px > STAR_DOT_FULL_GLARE_PX) {
                     float t = (glare_px - STAR_DOT_FULL_GLARE_PX)
@@ -1743,7 +1757,7 @@ void render_frame(const float view[16], const float proj[16],
 
             /* Non-star: overlap the dot with the first sphere pixels during the transition */
             float px_i = body_px[i];
-            if (!b->is_star && px_i > BODY_DOT_FADE_START_PX) {
+            if (!is_glare_star(b) && px_i > BODY_DOT_FADE_START_PX) {
                 float t = (px_i - BODY_DOT_FADE_START_PX)
                         / (BODY_DOT_FADE_END_PX - BODY_DOT_FADE_START_PX);
                 if (t > 1.0f) t = 1.0f;
@@ -1755,7 +1769,7 @@ void render_frame(const float view[16], const float proj[16],
             float by = (float)(b->pos[1] * RS - cy);
             float bz = (float)(b->pos[2] * RS - cz);
             /* Clamp star position so it stays within the far plane */
-            if (b->is_star) {
+            if (is_glare_star(b)) {
                 float d = sqrtf(bx*bx + by*by + bz*bz);
                 if (d > DOT_CLAMP_DIST && d > 1e-6f) {
                     float s = DOT_CLAMP_DIST / d;
@@ -1823,7 +1837,7 @@ void render_frame(const float view[16], const float proj[16],
 
         for (int i = 0; i < g_nbodies; i++) {
             if (!g_bodies[i].alive) continue;
-            if (!g_bodies[i].is_star) continue;
+            if (!is_glare_star(&g_bodies[i])) continue;
 
             float rx = (float)(g_bodies[i].pos[0] * RS - g_cam.pos[0]);
             float ry = (float)(g_bodies[i].pos[1] * RS - g_cam.pos[1]);
@@ -1853,6 +1867,12 @@ void render_frame(const float view[16], const float proj[16],
         glDepthMask(GL_TRUE);
         glDisable(GL_BLEND);
     }
+
+    /* ------------------------------------------------------------------ 6.2. Black holes
+     * Accretion disks and photon rings. Drawn after star glare so they compose
+     * additively over trails/glare while still being depth-occluded by the
+     * opaque event-horizon spheres rendered in the sphere pass. */
+    blackhole_render(vp_camrel, cam_right, cam_up, cam_fwd);
 
     /* ------------------------------------------------------------------ 6.5. Build preview */
     render_build_preview(vp_camrel);
@@ -1884,6 +1904,7 @@ void render_shutdown(void) {
     }
     if (s_build_font) TTF_CloseFont(s_build_font);
     TTF_Quit();
+    blackhole_shutdown();
     glDeleteProgram(s_sphere_shader);
     glDeleteProgram(s_atm_shader);
     glDeleteProgram(s_dot_shader);

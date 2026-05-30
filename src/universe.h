@@ -16,12 +16,16 @@ typedef struct {
     double vel[3];            /* m/s */
     float  col[3];
     int    is_star;
+    int    is_black_hole;
     int    parent;
     double obliquity;         /* degrees */
     double rotation_rate;     /* rad/s */
     float  atm_color[3];
     float  atm_intensity;
     float  atm_scale;
+    float  disk_color[3];     /* accretion disk base colour (black holes) */
+    float  disk_inner;        /* inner radius as multiple of event horizon */
+    float  disk_outer;        /* outer radius as multiple of event horizon (0 = none) */
 } BodyCreateSpec;
 
 /*

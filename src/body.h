@@ -14,6 +14,7 @@ typedef struct {
     double fast_acc[3];    /* m/s^2 dominant parent force, RESPA inner step */
     float  col[3];         /* RGB display colour              */
     int    is_star;
+    int    is_black_hole;   /* 1 = black hole (also has is_star=1 as a system root) */
     int    alive;           /* 0 = removed/absorbed; index kept stable */
     int    parent;         /* index of parent body (-1 = none)                  */
                            /* stars: -1; planets: star idx; moons: planet idx   */
@@ -32,6 +33,12 @@ typedef struct {
     float  atm_color[3];    /* RGB atmosphere rim colour                    */
     float  atm_intensity;   /* peak glow strength (0 = no atmosphere)       */
     float  atm_scale;       /* outer atm radius as multiple of planet radius */
+
+    /* Accretion disk (black holes only; disk_outer == 0 means no disk) */
+    float  disk_color[3];   /* base emissive colour of the disk             */
+    float  disk_inner;      /* inner radius as multiple of event horizon    */
+    float  disk_outer;      /* outer radius as multiple of event horizon    */
+    double disk_angle;      /* current swirl phase, rad (never wrapped)     */
 
     /* Orbital trail (circular buffer, TRAIL_LEN samples, positions in AU) */
     double trail_accum;      /* meters accumulated toward next sample      */

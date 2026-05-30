@@ -10,7 +10,8 @@ typedef enum {
     BUILD_VIS_ICE_PLANET,
     BUILD_VIS_MOON,
     BUILD_VIS_DWARF_PLANET,
-    BUILD_VIS_STAR
+    BUILD_VIS_STAR,
+    BUILD_VIS_BLACK_HOLE
 } BuildVisualType;
 
 typedef struct {
@@ -20,6 +21,7 @@ typedef struct {
     float  col[3];
     BuildVisualType visual_type;
     int    is_star;
+    int    is_black_hole;
     int    wants_planet_parent;
     int    wants_nonstar_parent;
     float  atm_color[3];

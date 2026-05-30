@@ -48,6 +48,7 @@
 #include "inspect.h"
 #include "collision.h"
 #include "supernova.h"
+#include "blackhole.h"
 #include "audio.h"
 #ifdef _OPENMP
 #include <omp.h>
@@ -921,6 +922,7 @@ int main(int argc, char **argv) {
                 physics_advance_time(effective_sim_dt);
                 supernova_step(effective_sim_dt);
                 collision_step(effective_sim_dt);
+                blackhole_step(effective_sim_dt);
                 asteroids_step(effective_sim_dt);
                 rings_tick(effective_sim_dt);
             }

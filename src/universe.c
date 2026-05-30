@@ -213,6 +213,21 @@ static void read_atmosphere(const JsonNode *bn, Body *bo)
     bo->atm_scale     = (float)json_num(json_get(atm, "scale"),     1.0);
 }
 
+/* Read the optional "accretion_disk" sub-object for a black hole: base color,
+ * inner and outer radius as multiples of the event-horizon radius. Defaults
+ * give a warm disk spanning 2.6–9× the horizon when the block is omitted. */
+static void read_accretion_disk(const JsonNode *bn, Body *bo)
+{
+    JsonNode *disk = json_get(bn, "accretion_disk");
+    float dc[3] = { 1.0f, 0.55f, 0.18f };
+    if (disk) read_color(json_get(disk, "color"), dc);
+    bo->disk_color[0] = dc[0];
+    bo->disk_color[1] = dc[1];
+    bo->disk_color[2] = dc[2];
+    bo->disk_inner = (float)json_num(json_get(disk, "inner"), 2.6);
+    bo->disk_outer = (float)json_num(json_get(disk, "outer"), 9.0);
+}
+
 /*
  * root_star_of — thin wrapper for body_root_star() (defined in body.c).
  *   Stars (parent=-1) return themselves in zero hops.
@@ -261,7 +276,8 @@ void universe_load(const char *path)
         JsonNode *bn;
         for (bn = bodies_arr->first_child; bn; bn = bn->next) {
             const char *type = json_str(json_get(bn, "type"), "");
-            if (strcmp(type, "star") != 0) continue;
+            int is_bh = (strcmp(type, "black_hole") == 0);
+            if (strcmp(type, "star") != 0 && !is_bh) continue;
 
             const char *name   = json_str(json_get(bn, "name"),      "unknown");
             double      mass   = json_num(json_get(bn, "mass"),       0.0);
@@ -285,7 +301,9 @@ void universe_load(const char *path)
             bo->radius         = rad_km * 1000.0;
             bo->pos[0]         = px; bo->pos[1] = py; bo->pos[2] = pz;
             bo->col[0]         = col[0]; bo->col[1] = col[1]; bo->col[2] = col[2];
-            bo->is_star        = 1;
+            bo->is_star        = 1;   /* black holes are system roots, like stars */
+            bo->is_black_hole  = is_bh;
+            if (is_bh) read_accretion_disk(bn, bo);
             read_rotation(bn, bo);
 
             /* Stash bulk velocity; convert km/s → m/s */
@@ -576,6 +594,7 @@ int universe_add_body(const BodyCreateSpec *spec)
     bo->col[1] = spec->col[1];
     bo->col[2] = spec->col[2];
     bo->is_star = spec->is_star;
+    bo->is_black_hole = spec->is_black_hole;
     bo->parent = spec->parent;
     bo->obliquity = spec->obliquity;
     bo->rotation_rate = spec->rotation_rate;
@@ -584,6 +603,11 @@ int universe_add_body(const BodyCreateSpec *spec)
     bo->atm_color[2] = spec->atm_color[2];
     bo->atm_intensity = spec->atm_intensity;
     bo->atm_scale = spec->atm_scale > 0.0f ? spec->atm_scale : 1.0f;
+    bo->disk_color[0] = spec->disk_color[0];
+    bo->disk_color[1] = spec->disk_color[1];
+    bo->disk_color[2] = spec->disk_color[2];
+    bo->disk_inner = spec->disk_inner;
+    bo->disk_outer = spec->disk_outer;
     alloc_trail(bo);
 
     return idx;

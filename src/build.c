@@ -67,15 +67,19 @@ static unsigned int s_build_rng = 0x51f15eedu; /* LCG state; fixed seed for dete
 
 /* ── preset table ─────────────────────────────────────────────────────────── */
 /* Each row: { name, mass_kg, radius_m, col_rgb, visual_type,
- *             is_star, wants_planet_parent, wants_nonstar_parent,
+ *             is_star, is_black_hole, wants_planet_parent, wants_nonstar_parent,
  *             atm_color_rgb, atm_intensity, atm_scale }              */
 static const BuildPreset s_presets[] = {
-    { "Rocky Planet", 5.972e24,   6371.0e3,  {0.52f, 0.44f, 0.36f}, BUILD_VIS_ROCKY,        0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
-    { "Gas Giant",    1.898e27,  71492.0e3,  {0.84f, 0.70f, 0.50f}, BUILD_VIS_GAS_GIANT,    0, 1, 0, {0.90f, 0.72f, 0.50f}, 0.25f, 1.22f },
-    { "Ice Planet",   8.681e25,  25559.0e3,  {0.62f, 0.84f, 0.96f}, BUILD_VIS_ICE_PLANET,   0, 1, 0, {0.62f, 0.90f, 1.00f}, 0.22f, 1.22f },
-    { "Moon",         7.342e22,   1737.4e3,  {0.72f, 0.72f, 0.68f}, BUILD_VIS_MOON,         0, 0, 1, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
-    { "Dwarf Planet", 1.309e22,   1188.3e3,  {0.68f, 0.63f, 0.58f}, BUILD_VIS_DWARF_PLANET, 0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
-    { "Star",         1.989e30, 696000.0e3,  {1.00f, 0.92f, 0.28f}, BUILD_VIS_STAR,         1, 0, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f }
+    { "Rocky Planet", 5.972e24,   6371.0e3,  {0.52f, 0.44f, 0.36f}, BUILD_VIS_ROCKY,        0, 0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Gas Giant",    1.898e27,  71492.0e3,  {0.84f, 0.70f, 0.50f}, BUILD_VIS_GAS_GIANT,    0, 0, 1, 0, {0.90f, 0.72f, 0.50f}, 0.25f, 1.22f },
+    { "Ice Planet",   8.681e25,  25559.0e3,  {0.62f, 0.84f, 0.96f}, BUILD_VIS_ICE_PLANET,   0, 0, 1, 0, {0.62f, 0.90f, 1.00f}, 0.22f, 1.22f },
+    { "Moon",         7.342e22,   1737.4e3,  {0.72f, 0.72f, 0.68f}, BUILD_VIS_MOON,         0, 0, 0, 1, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Dwarf Planet", 1.309e22,   1188.3e3,  {0.68f, 0.63f, 0.58f}, BUILD_VIS_DWARF_PLANET, 0, 0, 1, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    { "Star",         1.989e30, 696000.0e3,  {1.00f, 0.92f, 0.28f}, BUILD_VIS_STAR,         1, 0, 0, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f },
+    /* Black hole: 10 solar masses, an enlarged visual horizon so it is easy to
+     * place and see. is_star=1 makes it a system root; is_black_hole=1 switches
+     * on the dark-horizon render path and the accretion disk / photon ring. */
+    { "Black Hole",   1.989e31,  50000.0e3,  {0.45f, 0.22f, 0.05f}, BUILD_VIS_BLACK_HOLE,   1, 1, 0, 0, {0.00f, 0.00f, 0.00f}, 0.00f, 1.00f }
 };
 
 /* ── PRNG ─────────────────────────────────────────────────────────────────── */
@@ -197,6 +201,7 @@ static double random_rotation_period_days(BuildVisualType type)
     case BUILD_VIS_MOON:         return 0.4  + t * 18.0;
     case BUILD_VIS_DWARF_PLANET: return 0.25 + t * 5.0;
     case BUILD_VIS_STAR:         return 18.0 + t * 18.0;
+    case BUILD_VIS_BLACK_HOLE:   return 0.05 + t * 0.25;
     default:                     return 1.0;
     }
 }
@@ -213,6 +218,7 @@ static double random_obliquity_deg(BuildVisualType type)
     case BUILD_VIS_DWARF_PLANET: return t * 55.0;
     case BUILD_VIS_ROCKY:        return t * 45.0;
     case BUILD_VIS_STAR:         return 7.25;
+    case BUILD_VIS_BLACK_HOLE:   return 8.0 + t * 32.0;
     default:                     return 0.0;
     }
 }
@@ -671,7 +677,7 @@ int build_place_current(void)
     spec.mass = p->mass;
     spec.radius = p->radius;
     build_preview_pos_m(spec.pos);
-    if (p->visual_type == BUILD_VIS_STAR) {
+    if (p->visual_type == BUILD_VIS_STAR || p->visual_type == BUILD_VIS_BLACK_HOLE) {
         spec.col[0] = p->col[0];
         spec.col[1] = p->col[1];
         spec.col[2] = p->col[2];
@@ -679,6 +685,15 @@ int build_place_current(void)
         random_color_in_range(p->visual_type, spec.col);
     }
     spec.is_star = p->is_star;
+    spec.is_black_hole = p->is_black_hole;
+    if (p->is_black_hole) {
+        /* Warm accretion disk spanning 2.6–9× the event horizon. */
+        spec.disk_color[0] = 1.00f;
+        spec.disk_color[1] = 0.55f;
+        spec.disk_color[2] = 0.18f;
+        spec.disk_inner = 2.6f;
+        spec.disk_outer = 9.0f;
+    }
     spec.parent = -1;
     spec.obliquity = random_obliquity_deg(p->visual_type);
     spec.rotation_rate = random_rotation_rate(p->visual_type);
