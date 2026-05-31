@@ -13,12 +13,14 @@
  *
  * Usage per frame (only when at least one black hole is on screen):
  *   if (lensing_begin_scene()) {  ... render the whole scene ...  }
- *   lensing_resolve(sources, n, cam_right, cam_up, cam_fwd, fov_tan);
+ *   lensing_resolve(sources, n, bodies, nb, sun_pos, sun_col,
+ *                   cam_right, cam_up, cam_fwd, fov_tan);
  */
 #pragma once
 #include "common.h"
 
 #define LENS_MAX_HOLES 4
+#define LENS_MAX_BODIES 32   /* scene spheres ray-traced through the lens */
 
 typedef struct {
     float center[3];   /* hole centre, camera-relative render-AU (pos*RS - cam) */
@@ -31,6 +33,16 @@ typedef struct {
     float color[3];    /* disk / ring base colour */
     float disk_time;   /* swirl phase, rad */
 } LensSource;
+
+/* A scene body the geodesic ray-tracer intersects as an analytic sphere, so
+ * bodies behind the hole are genuinely lensed and bodies in front correctly
+ * occlude it (first hit along the bent path wins). */
+typedef struct {
+    float center[3];   /* camera-relative render-AU (pos*RS - cam) */
+    float radius;      /* render-AU */
+    float color[3];    /* base display colour (fallback shading) */
+    int   emissive;    /* 1 = star/self-luminous (no lambert term) */
+} LensBody;
 
 void lensing_init(void);
 
@@ -57,6 +69,8 @@ void lensing_capture_background(void);
  * fov_tan = tan(0.5*FOV); these reconstruct the per-pixel view ray.
  */
 void lensing_resolve(const LensSource *sources, int count,
+                     const LensBody *bodies, int nbody,
+                     const float sun_pos[3], const float sun_col[3],
                      const float cam_right[3], const float cam_up[3],
                      const float cam_fwd[3], float fov_tan);
 

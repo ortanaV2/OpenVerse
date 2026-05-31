@@ -1949,7 +1949,41 @@ void render_frame(const float view[16], const float proj[16],
             s->disk_time = (float)fmod(h->disk_angle, 2.0 * PI);
             n++;
         }
-        lensing_resolve(src, n, cam_right, cam_up, cam_fwd, fov_tan);
+
+        /* Scene bodies the geodesic ray-tracer intersects as spheres. Exclude
+         * black holes (drawn analytically above). Camera-relative render-AU. */
+        LensBody bodies[LENS_MAX_BODIES];
+        int nb = 0;
+        for (int i = 0; i < g_nbodies && nb < LENS_MAX_BODIES; i++) {
+            Body *b = &g_bodies[i];
+            if (!b->alive || b->is_black_hole) continue;
+            LensBody *lb = &bodies[nb];
+            lb->center[0] = (float)(b->pos[0] * RS - g_cam.pos[0]);
+            lb->center[1] = (float)(b->pos[1] * RS - g_cam.pos[1]);
+            lb->center[2] = (float)(b->pos[2] * RS - g_cam.pos[2]);
+            lb->radius    = (float)(b->radius * RS);
+            lb->color[0]  = b->col[0];
+            lb->color[1]  = b->col[1];
+            lb->color[2]  = b->col[2];
+            lb->emissive  = b->is_star;
+            nb++;
+        }
+
+        /* Sun for lambert shading of ray-traced bodies (nearest star). */
+        float sun_pos[3] = {0.0f, 0.0f, 0.0f};
+        float sun_col[3] = {1.0f, 1.0f, 0.96f};
+        int si = nearest_star_idx();
+        if (si >= 0) {
+            sun_pos[0] = (float)(g_bodies[si].pos[0] * RS - g_cam.pos[0]);
+            sun_pos[1] = (float)(g_bodies[si].pos[1] * RS - g_cam.pos[1]);
+            sun_pos[2] = (float)(g_bodies[si].pos[2] * RS - g_cam.pos[2]);
+            sun_col[0] = g_bodies[si].col[0];
+            sun_col[1] = g_bodies[si].col[1];
+            sun_col[2] = g_bodies[si].col[2];
+        }
+
+        lensing_resolve(src, n, bodies, nb, sun_pos, sun_col,
+                        cam_right, cam_up, cam_fwd, fov_tan);
     }
 
     /* ------------------------------------------------------------------ 7. Labels */

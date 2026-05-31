@@ -11,20 +11,27 @@
  *   - every time the path crosses a disk plane inside [r_inner, r_outer] the
  *     analytic disk emission is added, so the FAR side of the disk that wraps
  *     up and over the hole appears naturally as a second crossing;
- *   - a photon-ring glow is added from the path's closest approach;
- *   - the star background is sampled in the FINAL deflected direction by
- *     projecting it back to a scene texcoord.
+ *   - the bent path is intersected against every scene body as an analytic
+ *     SPHERE; the nearest hit along the path wins, so a body in front genuinely
+ *     occludes the hole and a body behind is genuinely lensed (its image bends,
+ *     wraps, or splits). A hit takes its colour from the body's real rasterised
+ *     pixel (reprojected to screen, depth-checked) for full texture + lighting,
+ *     falling back to analytic shading when that pixel isn't on screen;
+ *   - a photon-ring glow is added for rays that graze the photon sphere;
+ *   - rays that escape everything sample the sky-only texture in the FINAL
+ *     deflected direction.
  *
  * Pixels outside every hole's influence pass the captured scene straight
- * through. This is a screen-space pass but it never warps a flat image: the
- * disk and horizon are computed from geometry, so there is no tearing or
- * ghosting -- only the background, which has no parallax, is re-sampled.
+ * through. This is real per-pixel ray-tracing of the bent geodesic against the
+ * scene's sphere geometry, so occlusion and parallax are correct -- no warped
+ * flat image, no ghost copies. UI/text is drawn after the resolve and stays crisp.
  */
 
 in vec2 v_uv;
 
 uniform sampler2D u_scene;   /* full scene (sky + near geometry) for passthrough */
 uniform sampler2D u_stars;   /* sky only — safe to sample by bent ray direction  */
+uniform sampler2D u_depth;   /* scene depth (shared log metric) for SSR hit tests */
 uniform vec2  u_screen;
 uniform vec3  u_cam_right;
 uniform vec3  u_cam_up;
@@ -42,7 +49,18 @@ uniform vec3  u_dn[4];
 uniform vec3  u_color[4];
 uniform float u_time[4];
 
+/* Scene bodies, ray-traced as analytic spheres along the bent path. */
+uniform int   u_nbody;
+uniform vec3  u_body_c[32];
+uniform float u_body_r[32];
+uniform vec3  u_body_col[32];
+uniform int   u_body_emis[32];
+uniform vec3  u_sun;       /* camera-relative sun position (lambert light) */
+uniform vec3  u_sun_col;   /* sun colour for diffuse shading              */
+
 out vec4 frag_color;
+
+float g_aspect;            /* x/y, set once in main, read by projection helpers */
 
 /* ---- tunables ------------------------------------------------------------ */
 const int   STEPS         = 96;     /* path integration steps per pixel        */
@@ -52,6 +70,50 @@ const float SPAN_RO       = 1.4;    /* ...or in disk-outer radii, whichever wins
 const float RING_GAIN     = 0.9;    /* photon-ring brightness                  */
 const float RING_R        = 1.55;   /* ring peak, in horizon radii             */
 const float RING_W        = 0.30;   /* ring width, in horizon radii            */
+const float FAR           = 2000.0; /* shared far plane for the log-depth metric*/
+const float DEPTH_BIAS    = 0.002;  /* tolerance so grazing rays don't acne     */
+
+/* Encode/decode a camera-forward distance into the shared log metric every other
+ * shader writes to gl_FragDepth, so a ray-traced point can be matched to u_depth. */
+float encode_depth(float fwd) { return log2(fwd + 1.0) / log2(FAR + 1.0); }
+float decode_depth(float e)   { return exp2(e * log2(FAR + 1.0)) - 1.0;     }
+
+/* Project a camera-relative point to a screen UV; returns false if behind the
+ * camera or off-screen. Forward distance returned in out_fwd. */
+bool project_uv(vec3 hp, out vec2 uv, out float out_fwd) {
+    out_fwd = dot(hp, u_cam_fwd);
+    if (out_fwd <= 1e-4) return false;
+    float sx = dot(hp, u_cam_right) / out_fwd;
+    float sy = dot(hp, u_cam_up)    / out_fwd;
+    uv = vec2(sx / (g_aspect * u_fov_tan), sy / u_fov_tan) * 0.5 + 0.5;
+    return all(greaterThanEqual(uv, vec2(0.0))) &&
+           all(lessThanEqual(uv, vec2(1.0)));
+}
+
+/* Simple fallback shading when a ray-traced body is NOT visible on screen at its
+ * reprojected pixel (off-screen, or occluded there by nearer geometry). */
+vec3 shade_body(int i, vec3 hp) {
+    vec3 base = u_body_col[i];
+    if (u_body_emis[i] != 0) return base;          /* star: self-luminous */
+    vec3  nrm = normalize(hp - u_body_c[i]);
+    vec3  l   = u_sun - hp;
+    vec3  ld  = l / max(length(l), 1e-6);
+    float diff = max(dot(nrm, ld), 0.0);
+    return base * (0.04 + 0.96 * diff) * u_sun_col;
+}
+
+/* Colour of a body hit at hp: prefer its real rasterised pixel (full texture +
+ * lighting) by reprojecting to screen and confirming the depth there matches the
+ * hit distance; otherwise fall back to analytic shading. */
+vec3 body_color(int i, vec3 hp) {
+    vec2  uv; float hf;
+    if (project_uv(hp, uv, hf)) {
+        float scene_fwd = decode_depth(texture(u_depth, uv).r);
+        if (abs(scene_fwd - hf) <= 0.06 * hf + 1e-3)
+            return texture(u_scene, uv).rgb;
+    }
+    return shade_body(i, hp);
+}
 
 /* Analytic accretion-disk emission, identical to blackhole_disk.frag. */
 vec3 disk_emit(int i, vec3 hr, float rr) {
@@ -71,6 +133,7 @@ vec3 disk_emit(int i, vec3 hr, float rr) {
 
 void main() {
     float aspect = u_screen.x / u_screen.y;
+    g_aspect     = aspect;
     vec2  ndc    = v_uv * 2.0 - 1.0;
     vec3  u = normalize(u_cam_fwd
                       + u_cam_right * (ndc.x * aspect * u_fov_tan)
@@ -108,6 +171,9 @@ void main() {
     bool  captured = false;
     float rmin     = 1e30;        /* closest approach to dominant hole, in r_h  */
 
+    bool  body_hit = false;       /* bent path struck a scene body (sphere)      */
+    vec3  body_rgb = vec3(0.0);   /* shaded colour of that body                  */
+
     for (int s = 0; s < STEPS; s++) {
         /* gravity + capture + closest-approach, summed over holes */
         vec3 a = vec3(0.0);
@@ -138,29 +204,68 @@ void main() {
                     accum += disk_emit(i, hr, rr);
             }
         }
+
+        /* analytic ray-tracing of scene bodies along this path segment. Each body
+         * is a sphere; we solve the segment/sphere quadratic and keep the nearest
+         * entry. Because we march outward, the first segment that hits any sphere
+         * yields the nearest surface along the bent path -> first hit wins, so a
+         * body in front naturally occludes the hole and one behind is lensed. */
+        vec3  seg = pn - p;
+        float seg2 = dot(seg, seg);
+        float bt   = 2.0;
+        int   bi   = -1;
+        for (int i = 0; i < u_nbody; i++) {
+            vec3  oc = p - u_body_c[i];
+            float bq = dot(oc, seg);
+            float cq = dot(oc, oc) - u_body_r[i] * u_body_r[i];
+            float disc = bq * bq - seg2 * cq;
+            if (disc < 0.0) continue;
+            float sd = sqrt(disc);
+            float t  = (-bq - sd) / seg2;          /* entry point */
+            if (t < 0.0) t = (-bq + sd) / seg2;    /* segment started inside */
+            if (t >= 0.0 && t <= 1.0 && t < bt) { bt = t; bi = i; }
+        }
+        if (bi >= 0) {
+            vec3 hp = p + seg * bt;
+            body_hit = true;
+            body_rgb = body_color(bi, hp);
+            p = hp;
+            break;
+        }
         p = pn;
     }
 
-    /* photon-ring glow from rays that graze the photon sphere and escape */
-    if (!captured) {
-        float ring = exp(-pow((rmin - RING_R) / RING_W, 2.0));
-        accum += u_color[di] * ring * RING_GAIN;
-    }
-
-    /* lensed background: sample the scene in the final deflected direction */
+    /* Compose along the ray. accum already holds the disk emission crossed in
+     * front of whatever the ray finally meets (disk gas is additive). */
     vec3 col = accum;
-    if (!captured) {
+    if (captured) {
+        /* fell through the horizon: nothing behind shows, only the disk in front */
+    } else if (body_hit) {
+        /* the bent ray struck a real body: that body's surface is the background */
+        col += body_rgb;
+    } else {
+        /* the ray escaped past everything solid: add the photon-ring glow, then
+         * the lensed background in the final deflected direction. */
+        float ring = exp(-pow((rmin - RING_R) / RING_W, 2.0));
+        col += u_color[di] * ring * RING_GAIN;
+
         vec3  dir = normalize(v);
         float fz  = dot(dir, u_cam_fwd);
         if (fz > 1e-3) {
-            float nx = dot(dir, u_cam_right) / fz;
-            float ny = dot(dir, u_cam_up)    / fz;
-            vec2  buv = vec2(nx / (aspect * u_fov_tan), ny / u_fov_tan) * 0.5 + 0.5;
-            /* Sample the SKY-ONLY texture: only the sky is at infinity, so only
-             * it may be sampled by direction. Sampling the full scene here would
-             * duplicate near geometry (trails, planets) as lensed ghost copies.
-             * CLAMP_TO_EDGE keeps off-screen samples at the (dark) frame edge. */
-            col += texture(u_stars, clamp(buv, 0.0, 1.0)).rgb;
+            vec2  buv = vec2(dot(dir, u_cam_right) / (fz * aspect * u_fov_tan),
+                             dot(dir, u_cam_up)    /  fz)                * 0.5 + 0.5;
+            buv = clamp(buv, 0.0, 1.0);
+            /* Bright EXTENDED structures behind the hole (star glare, atmospheres,
+             * nebulae, supernova clouds) are near-geometry billboards, so they are
+             * absent from the sky-only snapshot -- sampling u_stars there yields
+             * black, which reads as a flat disc covering them instead of bending
+             * them. So we sample the FULL scene by direction wherever the content
+             * at that pixel sits BEHIND the hole (parallax-safe background); only
+             * truly near content falls back to the sky-only texture to avoid the
+             * ghost copies that direction-sampling near geometry would produce. */
+            float bg_fwd = decode_depth(texture(u_depth, buv).r);
+            if (bg_fwd > tc_d)  col += texture(u_scene, buv).rgb;
+            else                col += texture(u_stars, buv).rgb;
         }
     }
 
@@ -170,5 +275,14 @@ void main() {
      * where the deflection is already negligible. */
     vec3  through = texture(u_scene, v_uv).rgb;
     float edge    = smoothstep(1.0, 0.75, best);
+
+    /* Occlusion: if real geometry rasterised at THIS pixel sits in front of the
+     * hole's closest approach, that body hides the hole and all its lensing, so
+     * the pixel must show the untouched scene. Without this the composite draws
+     * over foreground bodies and the hole appears to shine through them. */
+    float here_d = texture(u_depth, v_uv).r;
+    float hole_d = encode_depth(tc_d * dot(u, u_cam_fwd));
+    if (here_d < hole_d - DEPTH_BIAS) edge = 0.0;
+
     frag_color = vec4(mix(through, col, edge), 1.0);
 }
